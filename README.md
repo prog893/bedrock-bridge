@@ -58,18 +58,11 @@ Alias the bridge to a short command for frequent use. Add to `~/.zshrc` or `~/.b
 
 ```bash
 # Dedicated command per model; leaves `claude` untouched
-alias claude-kimi='BEDROCK_BRIDGE_MODEL=moonshotai.kimi-k2.5 \
-                   BEDROCK_BRIDGE_MODEL_LIGHT=minimax.minimax-m2.5 \
-                   bedrock-bridge --claude --'
-
-alias claude-glm='BEDROCK_BRIDGE_MODEL=zai.glm-5 \
-                  BEDROCK_BRIDGE_MODEL_LIGHT=zai.glm-4.7-flash \
-                  bedrock-bridge --claude --'   # text-only; image turns intercepted
+alias claude-kimi='bedrock-bridge -m moonshotai.kimi-k2.5 --model-light minimax.minimax-m2.5 --claude --'
+alias claude-glm='bedrock-bridge -m zai.glm-5 --model-light zai.glm-4.7-flash --claude --'  # text-only; image turns intercepted
 
 # Or override `claude` so every invocation routes through the bridge
-export BEDROCK_BRIDGE_MODEL=moonshotai.kimi-k2.5
-export BEDROCK_BRIDGE_MODEL_LIGHT=minimax.minimax-m2.5
-alias claude='bedrock-bridge --claude --'
+alias claude='bedrock-bridge -m moonshotai.kimi-k2.5 --model-light minimax.minimax-m2.5 --claude --'
 ```
 
 All forms accept the full `claude` flag set, including `--continue` and `--resume`.

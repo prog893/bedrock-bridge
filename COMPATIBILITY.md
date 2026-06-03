@@ -27,6 +27,8 @@ Region: `ap-northeast-1`. bedrock-bridge serves only non-Claude models; Anthropi
 - **`text+tool` passes on every model.** Tool-use translation and tool-name/ID shortening are safe across providers.
 - **`image+tool` is `N/A` for text-only models.** The bridge detects the missing IMAGE input modality at preflight and replaces image content with an explicit text marker before the request reaches Bedrock, so the model answers honestly instead of confabulating. Use a vision-capable model for image work.
 
+If you hit a failure with a model that should work, it is most likely a bridge-side translation gap (request/response shaping, streaming, tool or image handling), not a Bedrock or model-provider problem. These gaps are work in progress; please file an issue with the model ID and the bridge log. Treat a failure here as "the bridge does not handle this model's shape yet" rather than "Bedrock or the model is broken."
+
 ## Reproducing
 
 ```bash
