@@ -16,12 +16,13 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
-BRIDGE = "/Users/trgyv/Desktop/bedrock-bridge/.venv/bin/bedrock-bridge"
+BRIDGE = os.environ.get("BEDROCK_BRIDGE_BIN") or shutil.which("bedrock-bridge") or "bedrock-bridge"
 LOG_DIR = tempfile.gettempdir()
 
 MODELS = [
