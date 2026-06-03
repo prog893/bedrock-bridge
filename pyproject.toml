@@ -4,10 +4,9 @@ description = "Local proxy to run Claude Code with any Bedrock model"
 requires-python = ">=3.10"
 dynamic = ["version"]
 dependencies = [
-    "fastapi>=0.115",
+    "starlette>=0.40",
     "uvicorn>=0.34",
     "boto3>=1.35",
-    "httpx>=0.28",
 ]
 
 [project.scripts]

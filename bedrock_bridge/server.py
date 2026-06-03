@@ -1,4 +1,4 @@
-"""FastAPI server: Anthropic Messages API → Bedrock Converse API proxy."""
+"""Starlette server: Anthropic Messages API to Bedrock Converse API proxy."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import json
 import logging
 
 import boto3
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse, JSONResponse
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse, StreamingResponse
+from starlette.routing import Route
 
 from . import __version__
 from .translate import (
@@ -20,7 +22,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("bedrock-bridge")
 logger.setLevel(logging.INFO)
 
-app = FastAPI(title="bedrock-bridge")
 
 _client = None
 _region = None
@@ -61,7 +62,7 @@ def set_light_model(model_id: str | None):
 def _route(model_alias: str) -> str:
     """Pick the Bedrock model ID based on what the caller asked for.
 
-    The CLI sets ANTHROPIC_MODEL=<main_id> and ANTHROPIC_SMALL_FAST_MODEL=<light_id>
+    The CLI sets ANTHROPIC_MODEL=<main_id> and ANTHROPIC_DEFAULT_HAIKU_MODEL=<light_id>
     on the spawned Claude Code process, so the incoming `model` field is one
     of those two IDs verbatim. Exact match wins; "haiku" substring is the
     fallback for clients that emit Anthropic-style names without going through
@@ -76,7 +77,6 @@ def _route(model_alias: str) -> str:
     return model_alias
 
 
-@app.post("/v1/messages")
 async def messages(request: Request):
     body = await request.json()
     stream = body.get("stream", False)
@@ -87,7 +87,7 @@ async def messages(request: Request):
     raw_tools = body.get("tools", [])
     tool_summary = [t.get("type") or t.get("name") for t in raw_tools]
     logger.info(
-        f"→ model_in={model_alias} → routed={model_id} stream={stream} "
+        f"-> model_in={model_alias} -> routed={model_id} stream={stream} "
         f"tools({len(raw_tools)})={tool_summary}"
     )
 
@@ -175,7 +175,6 @@ def _dump_failure(body: dict, kwargs: dict, err: str):
     logger.error(f"dumped failing request to {path}")
 
 
-@app.post("/set-model")
 async def set_model(request: Request):
     body = await request.json()
     main = body.get("main_model_id") or body.get("model_id", "")
@@ -183,29 +182,38 @@ async def set_model(request: Request):
     set_main_model(main)
     set_light_model(light)
     logger.info(f"Models set: main={main} light={light or 'none'}")
-    return {"status": "ok", "main_model_id": main, "light_model_id": light}
+    return JSONResponse({"status": "ok", "main_model_id": main, "light_model_id": light})
 
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+async def health(request: Request):
+    return JSONResponse({"status": "ok"})
 
 
-@app.get("/v1/models")
-async def list_models():
+async def list_models(request: Request):
     """Stub Anthropic models endpoint so Claude Code's discovery call passes."""
     items = []
     if _main_model:
         items.append({"id": _main_model, "display_name": _main_model, "type": "model", "created_at": "2025-01-01T00:00:00Z"})
     if _light_model:
         items.append({"id": _light_model, "display_name": _light_model, "type": "model", "created_at": "2025-01-01T00:00:00Z"})
-    return {"data": items}
+    return JSONResponse({"data": items})
 
 
-@app.post("/v1/complete")
 async def complete(request: Request):
     """Handle legacy complete endpoint."""
     return JSONResponse(
         {"error": {"type": "not_supported", "message": "Use /v1/messages"}},
         status_code=400,
     )
+
+
+app = Starlette(
+    debug=False,
+    routes=[
+        Route("/v1/messages", messages, methods=["POST"]),
+        Route("/v1/models", list_models, methods=["GET"]),
+        Route("/v1/complete", complete, methods=["POST"]),
+        Route("/set-model", set_model, methods=["POST"]),
+        Route("/health", health, methods=["GET"]),
+    ],
+)
