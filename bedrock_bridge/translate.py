@@ -85,10 +85,9 @@ def anthropic_to_converse(body: dict) -> tuple[dict, dict]:
         kwargs["inferenceConfig"] = inf
 
     # Tools. Server-side Anthropic tools (web_search_*, computer_*, bash_*,
-    # text_editor_*) are executed by Anthropic's servers, not the client —
-    # Bedrock Converse has no equivalent, so drop them. Converse also rejects
-    # an empty tools list, so only set toolConfig if at least one client tool
-    # remains.
+    # text_editor_*) execute on Anthropic's servers; Bedrock Converse has no
+    # equivalent, so drop them. Converse also rejects an empty tools list,
+    # so only set toolConfig if at least one client tool remains.
     if tools := body.get("tools"):
         client_tools = [_convert_tool(t) for t in tools if _is_client_tool(t)]
         if client_tools:
@@ -136,7 +135,7 @@ def _convert_tool_result_content(content) -> list[dict]:
                 out.append(img)
         elif btype == "json":
             out.append({"json": b.get("json", {})})
-        # Unknown block types are dropped — Bedrock would reject them anyway.
+        # Unknown block types are dropped; Bedrock would reject them anyway.
     # Bedrock rejects an empty content list. Fall back to a single empty text
     # block so the request still validates.
     if not out:
@@ -184,7 +183,7 @@ def _convert_message(msg: dict) -> dict:
         elif btype == "thinking":
             # Bedrock Converse accepts reasoning on input via reasoningContent.
             # For models that don't support signed reasoning the call will
-            # ValidationException — prefer loud failure over silent loss.
+            # ValidationException; prefer loud failure over silent loss.
             reasoning_text: dict[str, Any] = {"text": block.get("thinking", "")}
             if sig := block.get("signature"):
                 reasoning_text["signature"] = sig

@@ -17,7 +17,7 @@ Prerequisites: macOS, AWS credentials, Bedrock model access enabled, IAM permiss
 # Run Claude Code through Kimi K2.5
 bedrock-bridge --model moonshotai.kimi-k2.5 --claude
 
-# Two-model setup: main + small/fast
+# Two-model setup: main + light
 bedrock-bridge -m moonshotai.kimi-k2.5 --model-light minimax.minimax-m2.5 --claude
 
 # Just run the proxy; wire your own client
@@ -27,13 +27,52 @@ bedrock-bridge --model moonshotai.kimi-k2.5
 | Slot | Env var | CLI flag |
 |------|---------|----------|
 | Main (required) | `BEDROCK_BRIDGE_MODEL` | `--model` / `-m` |
-| Small/fast (optional) | `BEDROCK_BRIDGE_MODEL_LIGHT` | `--model-light` |
+| Light (optional) | `BEDROCK_BRIDGE_MODEL_LIGHT` | `--model-light` |
 
-The small/fast slot is for background tasks Claude Code dispatches to a smaller model. Skip it and everything routes to main.
+The light slot is for background tasks Claude Code dispatches to a smaller model. If no light model is configured, all requests route to the main model.
+
+Claude Code's auto-mode safety classifier works through the bridge. With a light slot configured it runs there; without one it falls through to the main model.
 
 Pass any Bedrock foundation ID (`moonshotai.kimi-k2.5`) or inference-profile ID (`us.meta.llama4-...`) directly. CLI flags override env vars.
 
-Extra `claude` flags pass through after `--`: `bedrock-bridge -m kimi-k2.5 --claude -- --verbose`.
+Extra `claude` flags pass through after `--`: `bedrock-bridge -m moonshotai.kimi-k2.5 --claude -- --verbose`.
+
+### Resuming sessions
+
+Claude Code's `--continue` and `--resume` work normally through the bridge:
+
+```bash
+# Continue the most recent session in the current directory
+bedrock-bridge -m moonshotai.kimi-k2.5 --claude -- --continue
+
+# Pick a session interactively
+bedrock-bridge -m moonshotai.kimi-k2.5 --claude -- --resume
+
+# Resume a specific session by id
+bedrock-bridge -m moonshotai.kimi-k2.5 --claude -- --resume <session-id>
+```
+
+### Aliases
+
+Alias the bridge to a short command for frequent use. Add to `~/.zshrc` or `~/.bashrc`:
+
+```bash
+# Dedicated command per model; leaves `claude` untouched
+alias claude-kimi='BEDROCK_BRIDGE_MODEL=moonshotai.kimi-k2.5 \
+                   BEDROCK_BRIDGE_MODEL_LIGHT=minimax.minimax-m2.5 \
+                   bedrock-bridge --claude --'
+
+alias claude-glm='BEDROCK_BRIDGE_MODEL=zai.glm-5 \
+                  BEDROCK_BRIDGE_MODEL_LIGHT=zai.glm-4.7-flash \
+                  bedrock-bridge --claude --'   # text-only; image turns intercepted
+
+# Or override `claude` so every invocation routes through the bridge
+export BEDROCK_BRIDGE_MODEL=moonshotai.kimi-k2.5
+export BEDROCK_BRIDGE_MODEL_LIGHT=minimax.minimax-m2.5
+alias claude='bedrock-bridge --claude --'
+```
+
+All forms accept the full `claude` flag set, including `--continue` and `--resume`.
 
 ## Privacy
 
@@ -44,6 +83,13 @@ The bridge itself makes no outbound calls except to AWS Bedrock and STS, tagged 
 ## Running Claude on Bedrock
 
 bedrock-bridge does not serve Claude models. Use Claude Code's native Bedrock mode (`CLAUDE_CODE_USE_BEDROCK=1`); see Anthropic's [setup guide](https://code.claude.com/docs/en/amazon-bedrock).
+
+## Known limitations
+
+- macOS only.
+- Bedrock models have a request body size cap, limiting the amount of data sendable in one request. When the cap is hit, Claude Code's TUI shows "Context limit reached · /compact or /clear to continue" and the session pauses. Run `/compact` to summarize old turns and continue, or `/clear` to start fresh. Common trigger: many large tool_result blocks (parallel screenshots, big file reads) accumulated across turns.
+- On non-vision models, the bridge replaces image blocks with an explicit text marker before forwarding to Bedrock so the request still validates and the model gets a clear "image cannot be shown" signal. The model is instructed to tell the user images are not supported. Use a vision-capable main model when working with images.
+- Claude Code's `/model` command is not supported. Every request routes to the model configured at bridge startup; in-session model swaps have no effect. Restart the bridge with a different `--model` to switch.
 
 ## Docs
 

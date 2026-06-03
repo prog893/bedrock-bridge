@@ -3,7 +3,7 @@
 
 For each model, launch `bedrock-bridge --model <id> --print ...` twice:
   1. A text-only turn that forces tool use (Bash echo).
-  2. An image turn — Claude Code Reads a PNG file; the tool result contains
+  2. An image turn: Claude Code Reads a PNG file; the tool result contains
      an image block (the shape that previously broke Kimi/MiniMax).
 
 After each run, tail the bridge log file for INFO routing lines and non-socket
@@ -61,10 +61,15 @@ def make_probe_png() -> str:
 
 
 def run_claude(model: str, prompt: str, timeout: int = 120) -> tuple[int, str, str, bool]:
-    """Spawn bedrock-bridge + Claude Code. Return (exit, stdout, log_path, timed_out)."""
+    """Spawn bedrock-bridge + Claude Code. Return (exit, stdout, log_path, timed_out).
+
+    --no-session-persistence isolates each turn so transcripts from the prior
+    model don't leak into the next (image-turn pollution into a text-turn was
+    a recurring false positive without this).
+    """
     before = set(glob.glob(f"{LOG_DIR}/bedrock-bridge-*.log"))
     cmd = [BRIDGE, "--model", model, "--claude", "--print", prompt,
-           "--", "--dangerously-skip-permissions"]
+           "--", "--dangerously-skip-permissions", "--no-session-persistence"]
     timed_out = False
     rc = -1
     out = b""
@@ -111,9 +116,16 @@ def analyze_log(path: str) -> dict:
 def classify(stdout: str, log_stats: dict, timed_out: bool = False) -> tuple[str, str]:
     """Return (status, note).
 
-    N/A is used when Bedrock reports the model doesn't support the requested
-    modality (e.g. image input on a text-only model).
+    N/A is used when the bridge or Bedrock reports the model doesn't support
+    the requested modality (e.g. image input on a text-only model).
+    REFUSED is used when the bridge refuses to start because the configured
+    target is an Anthropic Claude model.
     """
+    # Bridge preflight refusal happens before the proxy starts, so logs are
+    # absent. Detect via the message printed to stderr (captured into stdout
+    # because the matrix merges them).
+    if "is an Anthropic Claude model" in stdout and "bedrock-bridge does not serve Claude" in stdout:
+        return "REFUSED", "bridge refuses Anthropic IDs (use CLAUDE_CODE_USE_BEDROCK natively)"
     if log_stats["errors"]:
         sample = log_stats["errors"][0]
         if "doesn't support the image content block" in sample or \

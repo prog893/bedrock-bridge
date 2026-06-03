@@ -23,7 +23,7 @@ bedrock-bridge (CLI)
     |-- POST /set-model { main_id, light_id }
     |
     |-- (with --claude) spawn: claude
-    |       env: ANTHROPIC_BASE_URL, ANTHROPIC_MODEL, ANTHROPIC_SMALL_FAST_MODEL, ANTHROPIC_API_KEY
+    |       env: ANTHROPIC_BASE_URL, ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_API_KEY
     |
     \-- (without --claude) hold; print env wiring; wait on Ctrl-C
 ```
@@ -46,7 +46,7 @@ A single Anthropic-API request flows like this:
 When the CLI launches Claude Code under `--claude`, it sets two env vars on the spawned process:
 
 - `ANTHROPIC_MODEL=<main_id>` fills the primary slot.
-- `ANTHROPIC_DEFAULT_HAIKU_MODEL=<light_id>` fills the small/fast slot used by Claude Code's background tasks (auto-mode safety classifier, session title generation, summarization). Only set if a light model is configured.
+- `ANTHROPIC_DEFAULT_HAIKU_MODEL=<light_id>` fills the light slot used by Claude Code's background tasks (auto-mode safety classifier, session title generation, summarization). Only set if a light model is configured.
 
 Claude Code emits those exact strings in outgoing `model` fields. The proxy keys on exact match:
 

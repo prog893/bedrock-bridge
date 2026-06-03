@@ -66,10 +66,40 @@ def is_inference_profile(model_id: str) -> bool:
     return model_id.startswith(_PROFILE_PREFIXES)
 
 
-def preflight(region: str | None, main_id: str, light_id: str | None) -> None:
+def _model_supports_vision(bedrock_client, model_id: str) -> bool:
+    """Probe whether a Bedrock model accepts IMAGE input.
+
+    Foundation IDs map directly to GetFoundationModel. Inference-profile IDs
+    name a virtual route; we resolve them to the underlying foundation model
+    via the first entry in the profile's models list, then describe that.
+    """
+    try:
+        if is_inference_profile(model_id):
+            prof = bedrock_client.get_inference_profile(inferenceProfileIdentifier=model_id)
+            models = prof.get("models", [])
+            if not models:
+                return False
+            arn = models[0].get("modelArn", "")
+            fm_id = arn.rsplit("/", 1)[-1] if "/" in arn else arn
+            if not fm_id:
+                return False
+            r = bedrock_client.get_foundation_model(modelIdentifier=fm_id)
+        else:
+            r = bedrock_client.get_foundation_model(modelIdentifier=model_id)
+        modalities = r.get("modelDetails", {}).get("inputModalities", [])
+        return "IMAGE" in modalities
+    except Exception:
+        # If the capability lookup itself fails, assume vision-capable rather
+        # than reject all image-bearing turns up front. The actual call will
+        # surface a real error if the model genuinely rejects images.
+        return True
+
+
+def preflight(region: str | None, main_id: str, light_id: str | None) -> dict:
     """Verify credentials, region, and per-model access before serving traffic.
 
     Fail-fast with a clear message; let AWS error strings surface verbatim.
+    Returns a dict of capability flags to forward to the proxy.
     """
     print("  Preflight:")
 
@@ -95,6 +125,7 @@ def preflight(region: str | None, main_id: str, light_id: str | None) -> None:
     except (ClientError, BotoCoreError) as e:
         _fatal(f"could not construct bedrock client: {e}")
 
+    capabilities: dict = {}
     for label, mid in (("main", main_id), ("light", light_id)):
         if not mid:
             continue
@@ -103,9 +134,15 @@ def preflight(region: str | None, main_id: str, light_id: str | None) -> None:
                 bedrock.get_inference_profile(inferenceProfileIdentifier=mid)
             else:
                 bedrock.get_foundation_model(modelIdentifier=mid)
-            print(f"    ✓ {label}: {mid}")
         except (ClientError, BotoCoreError) as e:
             _fatal(f"{label} model {mid} not accessible: {e}")
+
+        vision = _model_supports_vision(bedrock, mid)
+        capabilities[f"{label}_supports_vision"] = vision
+        modalities = "text, image" if vision else "text"
+        print(f"    ✓ {label}: {mid} ({modalities})")
+
+    return capabilities
 
 
 def _fatal(msg: str) -> None:
@@ -156,7 +193,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
     print(f"  Proxy:  http://127.0.0.1:{port}")
     print()
 
-    preflight(region, main_id, light_id)
+    capabilities = preflight(region, main_id, light_id)
     print()
 
     log_path = os.path.join(tempfile.gettempdir(), f"bedrock-bridge-{port}.log")
@@ -199,7 +236,12 @@ def cmd_launch(args: argparse.Namespace) -> None:
 
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/set-model",
-        data=json.dumps({"main_model_id": main_id, "light_model_id": light_id}).encode(),
+        data=json.dumps({
+            "main_model_id": main_id,
+            "light_model_id": light_id,
+            "main_supports_vision": capabilities.get("main_supports_vision", True),
+            "light_supports_vision": capabilities.get("light_supports_vision", True),
+        }).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -226,7 +268,7 @@ def _run_claude(
         "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}",
         "ANTHROPIC_API_KEY": "bedrock-bridge",
         # ANTHROPIC_MODEL fills Claude Code's primary slot; ANTHROPIC_DEFAULT_HAIKU_MODEL
-        # fills the small/fast slot used by background tasks (auto-mode classifier,
+        # fills the light slot used by background tasks (auto-mode classifier,
         # session title generation, summarization). The bridge routes both back to
         # the configured Bedrock IDs by exact-string match in server._route.
         "ANTHROPIC_MODEL": main_id,

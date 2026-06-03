@@ -3,10 +3,10 @@
 
 For each model, probe four capabilities we care about in Claude Code:
 
-  1. text         — plain text response
-  2. tool_use     — emits a structured toolUse block
-  3. image_tr     — accepts an image inside toolResult.content
-  4. stream       — ConverseStream works
+  1. text         : plain text response
+  2. tool_use     : emits a structured toolUse block
+  3. image_tr     : accepts an image inside toolResult.content
+  4. stream       : ConverseStream works
 
 Writes a markdown table to stdout so the README can embed it.
 """
