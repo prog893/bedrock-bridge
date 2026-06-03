@@ -26,10 +26,6 @@ BRIDGE = os.environ.get("BEDROCK_BRIDGE_BIN") or shutil.which("bedrock-bridge") 
 LOG_DIR = tempfile.gettempdir()
 
 MODELS = [
-    "anthropic.claude-opus-4-7",
-    "anthropic.claude-sonnet-4-6",
-    "anthropic.claude-haiku-4-5-20251001-v1:0",
-    "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
     "moonshotai.kimi-k2.5",
     "moonshot.kimi-k2-thinking",
     "minimax.minimax-m2.5",
