@@ -9,7 +9,7 @@ brew tap prog893/tap
 brew install bedrock-bridge
 ```
 
-Prerequisites: macOS, AWS credentials, Bedrock model access enabled, IAM permissions ([IAM.md](./IAM.md)). For `--claude`: `claude` CLI on PATH (`brew install claude-code`).
+Prerequisites: macOS, AWS credentials, Bedrock model access enabled, IAM permissions ([docs/iam.md](./docs/iam.md)). For `--claude`: `claude` CLI on PATH (`brew install claude-code`).
 
 ## Quickstart
 
@@ -86,9 +86,9 @@ bedrock-bridge does not serve Claude models. Use Claude Code's native Bedrock mo
 
 ## Docs
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md): request flow, translation, preflight, routing.
-- [IAM.md](./IAM.md): minimum policy template.
-- [COMPATIBILITY.md](./COMPATIBILITY.md): end-to-end matrix across providers.
+- [docs/architecture.md](./docs/architecture.md): request flow, translation, preflight, routing.
+- [docs/iam.md](./docs/iam.md): minimum policy template.
+- [docs/compatibility.md](./docs/compatibility.md): end-to-end matrix across providers.
 
 ## Development
 

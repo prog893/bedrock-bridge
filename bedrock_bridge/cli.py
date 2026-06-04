@@ -66,33 +66,30 @@ def is_inference_profile(model_id: str) -> bool:
     return model_id.startswith(_PROFILE_PREFIXES)
 
 
-def _model_supports_vision(bedrock_client, model_id: str) -> bool:
-    """Probe whether a Bedrock model accepts IMAGE input.
+def _model_input_modalities(bedrock_client, model_id: str) -> list[str] | None:
+    """Return a Bedrock model's input modalities (e.g. ['TEXT', 'IMAGE']).
 
     Foundation IDs map directly to GetFoundationModel. Inference-profile IDs
     name a virtual route; we resolve them to the underlying foundation model
     via the first entry in the profile's models list, then describe that.
+    Returns None if the lookup fails (caller decides how to treat unknown).
     """
     try:
         if is_inference_profile(model_id):
             prof = bedrock_client.get_inference_profile(inferenceProfileIdentifier=model_id)
             models = prof.get("models", [])
             if not models:
-                return False
+                return None
             arn = models[0].get("modelArn", "")
             fm_id = arn.rsplit("/", 1)[-1] if "/" in arn else arn
             if not fm_id:
-                return False
+                return None
             r = bedrock_client.get_foundation_model(modelIdentifier=fm_id)
         else:
             r = bedrock_client.get_foundation_model(modelIdentifier=model_id)
-        modalities = r.get("modelDetails", {}).get("inputModalities", [])
-        return "IMAGE" in modalities
+        return r.get("modelDetails", {}).get("inputModalities", [])
     except Exception:
-        # If the capability lookup itself fails, assume vision-capable rather
-        # than reject all image-bearing turns up front. The actual call will
-        # surface a real error if the model genuinely rejects images.
-        return True
+        return None
 
 
 def preflight(region: str | None, main_id: str, light_id: str | None) -> dict:
@@ -152,10 +149,23 @@ def preflight(region: str | None, main_id: str, light_id: str | None) -> dict:
         except (ClientError, BotoCoreError) as e:
             _fatal(f"{label} model {mid} not accessible: {e}")
 
-        vision = _model_supports_vision(bedrock, mid)
+        modalities = _model_input_modalities(bedrock, mid)
+        # main carries the user's actual prompts; if it can't take TEXT it is
+        # unusable as a chat model (e.g. an image-gen or speech-only model).
+        # Fail loud rather than let every turn error at Bedrock. light is only
+        # used for background helper calls, so we don't gate it the same way.
+        if label == "main" and modalities is not None and "TEXT" not in modalities:
+            _fatal(
+                f"main model {mid} does not accept TEXT input "
+                f"(modalities: {', '.join(modalities) or 'none'}). It cannot "
+                f"serve as a chat model. Pick a text-capable model."
+            )
+        # Unknown modalities (lookup failed) default to vision-capable so we
+        # don't wrongly reject image turns; a real rejection surfaces at call.
+        vision = "IMAGE" in modalities if modalities is not None else True
         capabilities[f"{label}_supports_vision"] = vision
-        modalities = "text, image" if vision else "text"
-        print(f"    ✓ {label}: {mid} ({modalities})")
+        label_modalities = "text, image" if vision else "text"
+        print(f"    ✓ {label}: {mid} ({label_modalities})")
 
     return capabilities
 

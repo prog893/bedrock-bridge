@@ -24,6 +24,30 @@ from pathlib import Path
 
 BRIDGE = os.environ.get("BEDROCK_BRIDGE_BIN") or shutil.which("bedrock-bridge") or "bedrock-bridge"
 LOG_DIR = tempfile.gettempdir()
+REGION = os.environ.get("AWS_REGION") or "ap-northeast-1"
+
+_PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.", "jp.", "apne1.", "apne2.", "apne3.")
+
+
+def model_supports_image(model_id: str) -> bool:
+    """Best-effort: does this Bedrock model accept IMAGE input? Resolves
+    inference-profile IDs to their underlying foundation model. Defaults to
+    True if the lookup fails, so we still run the image turn rather than
+    wrongly skip it."""
+    try:
+        import boto3
+        c = boto3.client("bedrock", region_name=REGION)
+        mid = model_id
+        if model_id.startswith(_PROFILE_PREFIXES):
+            prof = c.get_inference_profile(inferenceProfileIdentifier=model_id)
+            models = prof.get("models", [])
+            if not models:
+                return True
+            mid = models[0].get("modelArn", "").rsplit("/", 1)[-1]
+        r = c.get_foundation_model(modelIdentifier=mid)
+        return "IMAGE" in r.get("modelDetails", {}).get("inputModalities", [])
+    except Exception:
+        return True
 
 MODELS = [
     "moonshotai.kimi-k2.5",
@@ -41,6 +65,14 @@ MODELS = [
     "google.gemma-3-27b-it",
     "apac.amazon.nova-pro-v1:0",
     "qwen.qwen3-next-80b-a3b",
+    "openai.gpt-oss-120b-1:0",
+    "openai.gpt-oss-20b-1:0",
+    "mistral.devstral-2-123b",
+    "mistral.magistral-small-2509",
+    "qwen.qwen3-32b-v1:0",
+    "qwen.qwen3-coder-30b-a3b-v1:0",
+    "amazon.nova-lite-v1:0",
+    "zai.glm-4.7-flash",
 ]
 
 
@@ -165,20 +197,25 @@ def main():
         for pair in set(s1["routings"]):
             print(f"    routed: {pair[0]} -> {pair[1]}")
 
-        # Image-in-tool-result turn
-        rc2, out2, log2, to2 = run_claude(m, f"Read the image file {probe_png} and describe what you see in one sentence.", timeout=args.timeout)
-        s2 = analyze_log(log2)
-        st2, n2 = classify(out2, s2, to2)
-        print(f"  img+tool : {st2} | reqs={s2['requests']} | {n2}")
-        for pair in set(s2["routings"]):
-            print(f"    routed: {pair[0]} -> {pair[1]}")
+        # Image-in-tool-result turn. Skip for text-only models: the bridge
+        # strips images to a text marker on non-vision targets, so running the
+        # turn would report a misleading OK. Mark N/A from the modality probe.
+        if not model_supports_image(m):
+            st2, n2, log2 = "N/A", "no vision modality", ""
+            print(f"  img+tool : {st2} | {n2}")
+        else:
+            rc2, out2, log2, to2 = run_claude(m, f"Read the image file {probe_png} and describe what you see in one sentence.", timeout=args.timeout)
+            s2 = analyze_log(log2)
+            st2, n2 = classify(out2, s2, to2)
+            print(f"  img+tool : {st2} | reqs={s2['requests']} | {n2}")
+            for pair in set(s2["routings"]):
+                print(f"    routed: {pair[0]} -> {pair[1]}")
 
         rows.append({
             "model": m,
             "text_tool": st1, "text_tool_note": n1,
             "img_tool": st2, "img_tool_note": n2,
             "log1": log1, "log2": log2,
-            "reqs1": s1["requests"], "reqs2": s2["requests"],
         })
 
     # Emit markdown

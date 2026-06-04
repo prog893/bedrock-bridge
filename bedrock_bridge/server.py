@@ -32,11 +32,15 @@ def get_client():
     global _client, _region
     if _client is None:
         from botocore.config import Config
-        # user_agent replaces the "Boto3/... Botocore/..." prefix; user_agent_extra
-        # appends. Set both so the tag is visible at the start of the UA (before any
-        # CloudTrail truncation) and still appears in the extra-segment list.
+        # Tag the User-Agent so bridge calls are identifiable in CloudTrail.
         ua = f"bedrock-bridge/{__version__}"
-        cfg = Config(user_agent=ua, user_agent_extra=ua)
+        # More generous read timeout than botocore's 60s default; keep connect
+        # short so genuine network failures still fail fast.
+        cfg = Config(
+            user_agent=ua,
+            connect_timeout=10,
+            read_timeout=300,
+        )
         # region_name=None lets boto3 resolve via its standard chain
         # (AWS_REGION env, AWS_DEFAULT_REGION, profile config, IMDS).
         _client = boto3.client("bedrock-runtime", config=cfg)
@@ -198,47 +202,49 @@ def _format_error(err: str, body: dict | None) -> tuple[int, str, str]:
     Substring matching is case-insensitive and status-agnostic in Claude Code,
     so a 400 + "prompt is too long" substring is enough to fire compact.
     """
-    # Model context window full. Bedrock surfaces this as a wrapped JSON
-    # error like:
-    #   "This model's maximum context length is 262144 tokens. However, you
-    #    requested 32000 output tokens and your prompt contains at least
-    #    230145 input tokens, for a total of at least 262145 tokens..."
-    # Claude Code recognizes "prompt is too long: X tokens > Y maximum" and
-    # routes it to the compact recovery path. Rewrite preserving the real
-    # token counts when we can extract them, so getPromptTooLongTokenGap
-    # computes the right gap and compact peels enough to fit.
-    ctx_match = re.search(
-        r"maximum context length is (\d+).*?at least (\d+) input tokens.*?total of at least (\d+)",
-        err,
-        re.DOTALL,
-    )
-    if ctx_match:
-        cap = int(ctx_match.group(1))
-        total = int(ctx_match.group(3))
+    # Pattern provenance: each branch matches a verbatim Bedrock error string
+    # observed from a real model. Bedrock collapses every validation failure
+    # into `ValidationException` with no structured discriminator, so we have
+    # to classify on the message text. See docs/error-mapping.md for the
+    # catalog of observed samples, the model that produced each, and the date.
+    # When a new model surfaces a phrasing these don't catch, add a sample
+    # there and widen the keyword here, rather than keying patterns per model
+    # ID (the category phrase is stable across models; the model ID is not).
+
+    # Context window full -> Claude Code "prompt is too long" -> compact path.
+    # Stable phrase across providers: "context length". Numbers are extracted
+    # only to hand getPromptTooLongTokenGap a positive gap; magnitudes, not
+    # exact values, are what matter.
+    low = err.lower()
+    if "context length" in low and ("exceed" in low or "maximum" in low):
+        # Keep only large numbers; Mantle wrappers embed status codes
+        # ("Some(400)") that would otherwise be mistaken for token counts.
+        nums = [int(n) for n in re.findall(r"\d+", err) if int(n) >= 1000]
+        limit, actual = (min(nums), max(nums)) if len(nums) >= 2 else (1, 2)
         message = (
-            f"prompt is too long: {total} tokens > {cap} maximum. "
+            f"prompt is too long: {actual} tokens > {limit} maximum. "
             f"[bedrock-bridge] model context window exceeded. Raw: {err}"
         )
         return 400, "invalid_request_error", message
 
-    # Per-image cap (Claude on Bedrock: 5 MB; some hosts surface similar).
-    # The error names the field, e.g. "messages.X.content.Y.tool_result.
-    # content.Z.image.source.base64: image exceeds 5 MB maximum: A bytes >
-    # B bytes". Anthropic's own client maps this to the "image too large"
-    # path which strips and retries that single image. 413 + "Request too
-    # large" routes through the same recovery while telling the user the
-    # blame is on a single oversized payload.
+    # Requested output tokens exceed the model's per-request output cap.
+    # Claude Code won't lower its own max_tokens, and Bedrock exposes no
+    # per-model output cap to clamp at preflight, so there's no auto-recovery;
+    # surface it plainly.
+    if "maximum tokens you requested exceeds" in low:
+        return 400, "invalid_request_error", (
+            f"[bedrock-bridge] {err} The configured model caps output tokens "
+            f"below what the client requested. Pick a model with a higher "
+            f"output limit, or lower the client's max-tokens setting."
+        )
+
+    # Per-image size cap -> Claude Code's per-image strip-and-retry path.
     if "image exceeds" in err and "maximum" in err:
         return 413, "invalid_request_error", f"[bedrock-bridge] {err}"
 
-    # Buffer overflow at model host (aggregate body, not a single image).
-    # Observed: ValidationException wrapping
-    # `{"error":{"message":"Failed to buffer the request body: length limit
-    # exceeded",...}}`. This is a per-model gateway cap, separate from the
-    # context window. Common trigger: many tool_result blocks (screenshots,
-    # big file reads) piling up across turns. We map it to "prompt is too
-    # long" so Claude Code's reactive-compact path fires and prunes
-    # conversation history instead of looping on the same oversized body.
+    # Model-host body buffer cap (aggregate body, not a single image). Distinct
+    # phrase from "context length"; maps to the same compact path. body_kb
+    # feeds a synthetic token gap so compaction peels enough turns to fit.
     if "Failed to buffer the request body" in err or "length limit exceeded" in err:
         body_kb = 0
         if body is not None:
