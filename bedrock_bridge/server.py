@@ -263,8 +263,14 @@ def _format_error(err: str, body: dict | None) -> tuple[int, str, str]:
         return 400, "invalid_request_error", message
 
     # Default: pass through with the bridge prefix so users see where the
-    # message originated. Claude Code renders this verbatim for unknown errors.
-    return 500, "api_error", f"[bedrock-bridge] {err}"
+    # message originated, plus a pointer to the issue tracker. Claude Code
+    # appends its own "server-side issue, check your inference gateway" tail
+    # to 500s (hardcoded, not editable here), so we lead with the actionable
+    # bit: this is likely a bridge translation gap, report it.
+    return 500, "api_error", (
+        f"[bedrock-bridge] {err} | If this looks like a bridge bug, report it: "
+        f"https://github.com/prog893/bedrock-bridge/issues"
+    )
 
 
 def _route_supports_vision(model_id: str) -> bool:

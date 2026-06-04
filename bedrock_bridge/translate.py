@@ -4,35 +4,52 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 from typing import Any
 
 # Bedrock Converse enforces a 64-char limit on both toolSpec.name and
-# toolUse(Result).toolUseId. Claude Code's MCP tools easily exceed that.
+# toolUse(Result).toolUseId, plus a charset constraint on each:
+#   name:      [a-zA-Z0-9_-]+
+#   toolUseId: [a-zA-Z0-9_.:-]+
+# Claude Code's MCP tools easily exceed the length cap; some non-Anthropic
+# models (e.g. Kimi) also emit malformed tool-use IDs with chat-template
+# tokens leaked in (spaces, "<|...|>"), which violate the charset.
 _BEDROCK_ID_LIMIT = 64
+_NAME_ILLEGAL = re.compile(r"[^a-zA-Z0-9_-]")
+_ID_ILLEGAL = re.compile(r"[^a-zA-Z0-9_.:-]")
 
-# Bidirectional tool name mapping for names > 64 chars
+# Bidirectional tool name mapping
 _name_to_short: dict[str, str] = {}
 _short_to_name: dict[str, str] = {}
 
-# Bidirectional tool-use ID mapping (same limit, different namespace)
+# Bidirectional tool-use ID mapping (different namespace, looser charset)
 _id_to_short: dict[str, str] = {}
 _short_to_id: dict[str, str] = {}
 
 
-def _shorten(value: str, fwd: dict[str, str], rev: dict[str, str], prefix_len: int) -> str:
-    if len(value) <= _BEDROCK_ID_LIMIT:
+def _shorten(value: str, fwd: dict[str, str], rev: dict[str, str], prefix_len: int,
+             illegal: re.Pattern) -> str:
+    """Map an arbitrary tool name/ID to a Bedrock-legal form (length + charset),
+    remembering the mapping so the response leg can restore the original.
+
+    A value is rewritten if it is too long OR contains characters Bedrock's
+    pattern rejects. The rewrite is deterministic (sha256 of the original),
+    so the toolUse and its matching toolResult resolve to the same short form.
+    """
+    if len(value) <= _BEDROCK_ID_LIMIT and not illegal.search(value):
         return value
     if value in fwd:
         return fwd[value]
     h = hashlib.sha256(value.encode()).hexdigest()[:8]
-    short = value[:prefix_len] + "_" + h
+    clean_prefix = illegal.sub("_", value[:prefix_len])
+    short = clean_prefix + "_" + h
     fwd[value] = short
     rev[short] = value
     return short
 
 
 def _shorten_tool_name(name: str) -> str:
-    return _shorten(name, _name_to_short, _short_to_name, prefix_len=55)
+    return _shorten(name, _name_to_short, _short_to_name, 55, _NAME_ILLEGAL)
 
 
 def _restore_tool_name(short: str) -> str:
@@ -40,7 +57,7 @@ def _restore_tool_name(short: str) -> str:
 
 
 def _shorten_tool_use_id(tool_use_id: str) -> str:
-    return _shorten(tool_use_id, _id_to_short, _short_to_id, prefix_len=55)
+    return _shorten(tool_use_id, _id_to_short, _short_to_id, 55, _ID_ILLEGAL)
 
 
 def _restore_tool_use_id(short: str) -> str:

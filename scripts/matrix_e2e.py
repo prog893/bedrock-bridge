@@ -36,6 +36,11 @@ MODELS = [
     "zai.glm-4.7",
     "zai.glm-5",
     "mistral.mistral-large-3-675b-instruct",
+    "nvidia.nemotron-super-3-120b",
+    "nvidia.nemotron-nano-12b-v2",
+    "google.gemma-3-27b-it",
+    "apac.amazon.nova-pro-v1:0",
+    "qwen.qwen3-next-80b-a3b",
 ]
 
 

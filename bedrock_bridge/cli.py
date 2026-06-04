@@ -133,7 +133,22 @@ def preflight(region: str | None, main_id: str, light_id: str | None) -> dict:
             if is_inference_profile(mid):
                 bedrock.get_inference_profile(inferenceProfileIdentifier=mid)
             else:
-                bedrock.get_foundation_model(modelIdentifier=mid)
+                fm = bedrock.get_foundation_model(modelIdentifier=mid)
+                # A bare foundation ID that the model can't be invoked with
+                # on-demand will fail mid-conversation with a cryptic Bedrock
+                # error ("Invocation ... with on-demand throughput isn't
+                # supported"). Catch it here: if ON_DEMAND isn't in the
+                # supported inference types, the user must pass the
+                # cross-region inference-profile form instead.
+                types = fm.get("modelDetails", {}).get("inferenceTypesSupported", [])
+                if types and "ON_DEMAND" not in types:
+                    _fatal(
+                        f"{label} model {mid} cannot be invoked with on-demand "
+                        f"throughput (supported: {', '.join(types)}). Pass the "
+                        f"cross-region inference-profile ID instead, e.g. a "
+                        f"`us.`, `eu.`, `apac.`, or `global.` prefixed form of "
+                        f"this model."
+                    )
         except (ClientError, BotoCoreError) as e:
             _fatal(f"{label} model {mid} not accessible: {e}")
 
