@@ -9,11 +9,11 @@ For each model, launch `bedrock-bridge --model <id> --print ...` twice:
 After each run, tail the bridge log file for INFO routing lines and non-socket
 errors. Emit a markdown table.
 """
+
 from __future__ import annotations
 
 import argparse
 import glob
-import json
 import os
 import re
 import shutil
@@ -25,6 +25,7 @@ from pathlib import Path
 BRIDGE = os.environ.get("BEDROCK_BRIDGE_BIN") or shutil.which("bedrock-bridge") or "bedrock-bridge"
 LOG_DIR = tempfile.gettempdir()
 REGION = os.environ.get("AWS_REGION") or "ap-northeast-1"
+FIXTURE_IMAGE = Path(__file__).resolve().parent.parent / "fixtures" / "sample_01.jpg"
 
 _PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.", "jp.", "apne1.", "apne2.", "apne3.")
 
@@ -36,6 +37,7 @@ def model_supports_image(model_id: str) -> bool:
     wrongly skip it."""
     try:
         import boto3
+
         c = boto3.client("bedrock", region_name=REGION)
         mid = model_id
         if model_id.startswith(_PROFILE_PREFIXES):
@@ -48,6 +50,7 @@ def model_supports_image(model_id: str) -> bool:
         return "IMAGE" in r.get("modelDetails", {}).get("inputModalities", [])
     except Exception:
         return True
+
 
 MODELS = [
     "moonshotai.kimi-k2.5",
@@ -76,21 +79,16 @@ MODELS = [
 ]
 
 
-def make_probe_png() -> str:
-    """Create a small PNG at a stable path and return it."""
-    import struct, zlib
-    def chunk(t, d):
-        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
-    sig = b"\x89PNG\r\n\x1a\n"
-    png = (
-        sig
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", 48, 48, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress((b"\x00" + bytes((255, 200, 0)) * 48) * 48))
-        + chunk(b"IEND", b"")
-    )
-    path = os.path.join(LOG_DIR, "matrix_probe.png")
-    Path(path).write_bytes(png)
-    return path
+def make_probe_image() -> str:
+    """Copy the shared test fixture to a neutrally named temp path and return it.
+
+    Uses the same image as the e2e grader. The neutral filename keeps the path
+    from hinting at the contents, so a model can't pass by reading the name."""
+    import uuid
+
+    dst = os.path.join(LOG_DIR, f"{uuid.uuid4().hex}{FIXTURE_IMAGE.suffix}")
+    shutil.copyfile(FIXTURE_IMAGE, dst)
+    return dst
 
 
 def run_claude(model: str, prompt: str, timeout: int = 120) -> tuple[int, str, str, bool]:
@@ -101,8 +99,17 @@ def run_claude(model: str, prompt: str, timeout: int = 120) -> tuple[int, str, s
     a recurring false positive without this).
     """
     before = set(glob.glob(f"{LOG_DIR}/bedrock-bridge-*.log"))
-    cmd = [BRIDGE, "--model", model, "--claude", "--print", prompt,
-           "--", "--dangerously-skip-permissions", "--no-session-persistence"]
+    cmd = [
+        BRIDGE,
+        "--model",
+        model,
+        "--claude",
+        "--print",
+        prompt,
+        "--",
+        "--dangerously-skip-permissions",
+        "--no-session-persistence",
+    ]
     timed_out = False
     rc = -1
     out = b""
@@ -121,8 +128,9 @@ def run_claude(model: str, prompt: str, timeout: int = 120) -> tuple[int, str, s
         timed_out = True
         out = e.stdout or b""
         # Clean up any lingering bridge/claude child processes from this run
-        subprocess.run(["pkill", "-f", f"bedrock-bridge --model {model}"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["pkill", "-f", f"bedrock-bridge --model {model}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
     time.sleep(0.5)
     after = set(glob.glob(f"{LOG_DIR}/bedrock-bridge-*.log"))
     new_logs = sorted(after - before, key=os.path.getmtime)
@@ -161,8 +169,7 @@ def classify(stdout: str, log_stats: dict, timed_out: bool = False) -> tuple[str
         return "REFUSED", "bridge refuses Anthropic IDs (use CLAUDE_CODE_USE_BEDROCK natively)"
     if log_stats["errors"]:
         sample = log_stats["errors"][0]
-        if "doesn't support the image content block" in sample or \
-           "doesn't support the image content" in sample:
+        if "doesn't support the image content block" in sample or "doesn't support the image content" in sample:
             return "N/A", "model has no vision modality"
         m = re.search(r"(ValidationException|AccessDeniedException|ThrottlingException)[^\"]*?: (.{0,120})", sample)
         note = m.group(0)[:120] if m else sample[:120]
@@ -176,21 +183,23 @@ def classify(stdout: str, log_stats: dict, timed_out: bool = False) -> tuple[str
     return "OK", ""
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--out", default="/tmp/bridge_matrix.md")
     ap.add_argument("--timeout", type=int, default=180)
     args = ap.parse_args()
 
-    probe_png = make_probe_png()
+    probe_png = make_probe_image()
     targets = [m for m in MODELS if not args.only or any(o in m for o in args.only)]
 
     rows = []
     for m in targets:
         print(f"=== {m} ===", flush=True)
         # Text + Bash tool turn
-        rc1, out1, log1, to1 = run_claude(m, "Use the Bash tool to run: echo MATRIX_OK_<model>. Output just the shell output.".replace("<model>", m.replace(".","-")[:20]), timeout=args.timeout)
+        tag = m.replace(".", "-")[:20]
+        text_prompt = f"Use the Bash tool to run: echo MATRIX_OK_{tag}. Output just the shell output."
+        rc1, out1, log1, to1 = run_claude(m, text_prompt, timeout=args.timeout)
         s1 = analyze_log(log1)
         st1, n1 = classify(out1, s1, to1)
         print(f"  text+tool: {st1} | reqs={s1['requests']} | {n1}")
@@ -204,19 +213,25 @@ def main():
             st2, n2, log2 = "N/A", "no vision modality", ""
             print(f"  img+tool : {st2} | {n2}")
         else:
-            rc2, out2, log2, to2 = run_claude(m, f"Read the image file {probe_png} and describe what you see in one sentence.", timeout=args.timeout)
+            img_prompt = f"Read the image file {probe_png} and describe what you see in one sentence."
+            rc2, out2, log2, to2 = run_claude(m, img_prompt, timeout=args.timeout)
             s2 = analyze_log(log2)
             st2, n2 = classify(out2, s2, to2)
             print(f"  img+tool : {st2} | reqs={s2['requests']} | {n2}")
             for pair in set(s2["routings"]):
                 print(f"    routed: {pair[0]} -> {pair[1]}")
 
-        rows.append({
-            "model": m,
-            "text_tool": st1, "text_tool_note": n1,
-            "img_tool": st2, "img_tool_note": n2,
-            "log1": log1, "log2": log2,
-        })
+        rows.append(
+            {
+                "model": m,
+                "text_tool": st1,
+                "text_tool_note": n1,
+                "img_tool": st2,
+                "img_tool_note": n2,
+                "log1": log1,
+                "log2": log2,
+            }
+        )
 
     # Emit markdown
     lines = []
@@ -226,8 +241,8 @@ def main():
     lines.append("- **text+tool**: Claude Code successfully calls `Bash` via the bridge.")
     lines.append("- **image+tool**: Claude Code `Read`s a PNG (image returned inside `tool_result`).")
     lines.append("")
-    lines.append(f"| Model | text+tool | image+tool | notes |")
-    lines.append(f"|-------|-----------|------------|-------|")
+    lines.append("| Model | text+tool | image+tool | notes |")
+    lines.append("|-------|-----------|------------|-------|")
     for r in rows:
         note = r["text_tool_note"] or r["img_tool_note"]
         lines.append(f"| `{r['model']}` | {r['text_tool']} | {r['img_tool']} | {note[:90]} |")

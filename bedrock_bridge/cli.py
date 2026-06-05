@@ -14,12 +14,16 @@ import tempfile
 import textwrap
 import time
 import urllib.request
+from typing import Any
 
 import boto3
-from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError, NoRegionError
+from botocore.exceptions import (
+    BotoCoreError,
+    ClientError,
+    NoCredentialsError,
+)
 
 from . import __version__
-
 
 LOGO = r"""
   ┌─────────────────────────────────┐
@@ -66,7 +70,7 @@ def is_inference_profile(model_id: str) -> bool:
     return model_id.startswith(_PROFILE_PREFIXES)
 
 
-def _model_input_modalities(bedrock_client, model_id: str) -> list[str] | None:
+def _model_input_modalities(bedrock_client: Any, model_id: str) -> list[str] | None:
     """Return a Bedrock model's input modalities (e.g. ['TEXT', 'IMAGE']).
 
     Foundation IDs map directly to GetFoundationModel. Inference-profile IDs
@@ -113,7 +117,7 @@ def preflight(region: str | None, main_id: str, light_id: str | None) -> dict:
 
     # Step 2: region
     if not region:
-        _fatal(f"no AWS region resolved. Set AWS_REGION, pick a profile with a region, or pass --region.")
+        _fatal("no AWS region resolved. Set AWS_REGION, pick a profile with a region, or pass --region.")
     print(f"    ✓ region: {region}")
 
     # Step 3: model access
@@ -181,8 +185,7 @@ def _refuse_anthropic(model_id: str, slot: str) -> None:
     for no benefit and breaks features the bridge drops (e.g. stopSequences,
     extended-thinking flags). Refuse early with a pointer to the native path.
     """
-    if model_id.startswith(("anthropic.", "global.anthropic.", "us.anthropic.",
-                            "eu.anthropic.", "apac.anthropic.")):
+    if model_id.startswith(("anthropic.", "global.anthropic.", "us.anthropic.", "eu.anthropic.", "apac.anthropic.")):
         print(
             f"    ✗ {slot} model {model_id} is an Anthropic Claude model. "
             f"bedrock-bridge does not serve Claude. Claude Code talks to "
@@ -229,18 +232,23 @@ def cmd_launch(args: argparse.Namespace) -> None:
         proxy_env["AWS_REGION"] = region
     proxy = subprocess.Popen(
         [
-            sys.executable, "-m", "uvicorn",
+            sys.executable,
+            "-m",
+            "uvicorn",
             "bedrock_bridge.server:app",
-            "--host", "127.0.0.1",
-            "--port", str(port),
-            "--log-level", "warning",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
         ],
         env=proxy_env,
         stdout=log_file,
         stderr=log_file,
     )
 
-    def cleanup(*_):
+    def cleanup(*_: object) -> None:
         proxy.terminate()
         try:
             proxy.wait(timeout=5)
@@ -261,12 +269,14 @@ def cmd_launch(args: argparse.Namespace) -> None:
 
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/set-model",
-        data=json.dumps({
-            "main_model_id": main_id,
-            "light_model_id": light_id,
-            "main_supports_vision": capabilities.get("main_supports_vision", True),
-            "light_supports_vision": capabilities.get("light_supports_vision", True),
-        }).encode(),
+        data=json.dumps(
+            {
+                "main_model_id": main_id,
+                "light_model_id": light_id,
+                "main_supports_vision": capabilities.get("main_supports_vision", True),
+                "light_supports_vision": capabilities.get("light_supports_vision", True),
+            }
+        ).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -304,9 +314,7 @@ def _run_claude(
         # home no more than a native CLAUDE_CODE_USE_BEDROCK=1 session would.
         # Local state (session transcripts, /cost, auto-memory) is unaffected.
         # Users can override by exporting CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=0.
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": os.environ.get(
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"
-        ),
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": os.environ.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
     }
     if light_id:
         claude_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = light_id
@@ -339,7 +347,7 @@ def _hold(port: int, main_id: str, region: str | None, proxy: subprocess.Popen) 
     print("  Proxy is running. Wire any Anthropic-API client to:")
     print()
     print(f"    export ANTHROPIC_BASE_URL=http://127.0.0.1:{port}")
-    print(f"    export ANTHROPIC_API_KEY=bedrock-bridge")
+    print("    export ANTHROPIC_API_KEY=bedrock-bridge")
     print()
     print(f"  Tell the client to request model id: {main_id}")
     if region:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+from collections.abc import Iterator
 from typing import Any
 
 # Bedrock Converse enforces a 64-char limit on both toolSpec.name and
@@ -33,8 +34,7 @@ _id_to_short: dict[str, str] = {}
 _short_to_id: dict[str, str] = {}
 
 
-def _shorten(value: str, fwd: dict[str, str], rev: dict[str, str], prefix_len: int,
-             illegal: re.Pattern) -> str:
+def _shorten(value: str, fwd: dict[str, str], rev: dict[str, str], prefix_len: int, illegal: re.Pattern) -> str:
     """Map an arbitrary tool name/ID to a Bedrock-legal form (length + charset),
     remembering the mapping so the response leg can restore the original.
 
@@ -89,9 +89,7 @@ def anthropic_to_converse(body: dict) -> tuple[dict, dict]:
         if isinstance(system, str):
             kwargs["system"] = [{"text": system}]
         elif isinstance(system, list):
-            kwargs["system"] = [
-                {"text": block["text"]} for block in system if block.get("type") == "text"
-            ]
+            kwargs["system"] = [{"text": block["text"]} for block in system if block.get("type") == "text"]
 
     # Inference config
     inf: dict[str, Any] = {}
@@ -135,7 +133,7 @@ def _anthropic_image_to_bedrock(block: dict) -> dict | None:
     return {"image": {"format": fmt, "source": {"bytes": raw}}}
 
 
-def _convert_tool_result_content(content) -> list[dict]:
+def _convert_tool_result_content(content: Any) -> list[dict]:
     """Anthropic tool_result.content → Bedrock toolResult.content blocks.
 
     Bedrock requires non-empty content and supports text + image + json blocks
@@ -184,21 +182,25 @@ def _convert_message(msg: dict) -> dict:
             if text:
                 blocks.append({"text": text})
         elif btype == "tool_use":
-            blocks.append({
-                "toolUse": {
-                    "toolUseId": _shorten_tool_use_id(block["id"]),
-                    "name": _shorten_tool_name(block["name"]),
-                    "input": block.get("input", {}),
+            blocks.append(
+                {
+                    "toolUse": {
+                        "toolUseId": _shorten_tool_use_id(block["id"]),
+                        "name": _shorten_tool_name(block["name"]),
+                        "input": block.get("input", {}),
+                    }
                 }
-            })
+            )
         elif btype == "tool_result":
-            blocks.append({
-                "toolResult": {
-                    "toolUseId": _shorten_tool_use_id(block["tool_use_id"]),
-                    "content": _convert_tool_result_content(block.get("content", "")),
-                    **({"status": "error"} if block.get("is_error") else {}),
+            blocks.append(
+                {
+                    "toolResult": {
+                        "toolUseId": _shorten_tool_use_id(block["tool_use_id"]),
+                        "content": _convert_tool_result_content(block.get("content", "")),
+                        **({"status": "error"} if block.get("is_error") else {}),
+                    }
                 }
-            })
+            )
         elif btype == "image":
             img = _anthropic_image_to_bedrock(block)
             if img is not None:
@@ -293,21 +295,25 @@ def converse_to_anthropic(response: dict, metadata: dict) -> dict:
             content.append({"type": "text", "text": block["text"]})
         elif "toolUse" in block:
             tu = block["toolUse"]
-            content.append({
-                "type": "tool_use",
-                "id": _restore_tool_use_id(tu["toolUseId"]),
-                "name": _restore_tool_name(tu["name"]),
-                "input": tu["input"],
-            })
+            content.append(
+                {
+                    "type": "tool_use",
+                    "id": _restore_tool_use_id(tu["toolUseId"]),
+                    "name": _restore_tool_name(tu["name"]),
+                    "input": tu["input"],
+                }
+            )
         elif "reasoningContent" in block:
             rc = block["reasoningContent"]
             if "reasoningText" in rc:
                 rt = rc["reasoningText"]
-                content.append({
-                    "type": "thinking",
-                    "thinking": rt.get("text", ""),
-                    "signature": rt.get("signature", ""),
-                })
+                content.append(
+                    {
+                        "type": "thinking",
+                        "thinking": rt.get("text", ""),
+                        "signature": rt.get("signature", ""),
+                    }
+                )
             elif "redactedContent" in rc:
                 data = rc["redactedContent"]
                 if isinstance(data, (bytes, bytearray)):
@@ -329,7 +335,9 @@ def converse_to_anthropic(response: dict, metadata: dict) -> dict:
     }
 
 
-def converse_stream_to_anthropic_events(event: dict, metadata: dict, state: dict | None = None):
+def converse_stream_to_anthropic_events(
+    event: dict, metadata: dict, state: dict | None = None
+) -> Iterator[tuple[str, dict]]:
     """Convert a single Bedrock converse-stream event to Anthropic SSE events.
 
     Yields (event_type, data_dict) tuples. `state` is a per-stream dict the
@@ -351,19 +359,22 @@ def converse_stream_to_anthropic_events(event: dict, metadata: dict, state: dict
 
     if "messageStart" in event:
         seen.clear()
-        yield "message_start", {
-            "type": "message_start",
-            "message": {
-                "id": "msg_bridge_" + _short_id(),
-                "type": "message",
-                "role": event["messageStart"].get("role", "assistant"),
-                "content": [],
-                "model": metadata.get("model", "unknown"),
-                "stop_reason": None,
-                "stop_sequence": None,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
+        yield (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_bridge_" + _short_id(),
+                    "type": "message",
+                    "role": event["messageStart"].get("role", "assistant"),
+                    "content": [],
+                    "model": metadata.get("model", "unknown"),
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
             },
-        }
+        )
 
     elif "contentBlockStart" in event:
         cbs = event["contentBlockStart"]
@@ -373,16 +384,19 @@ def converse_stream_to_anthropic_events(event: dict, metadata: dict, state: dict
         if "toolUse" in start:
             tu = start["toolUse"]
             seen.add(idx)
-            yield "content_block_start", {
-                "type": "content_block_start",
-                "index": idx,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": _restore_tool_use_id(tu.get("toolUseId", "")),
-                    "name": _restore_tool_name(tu.get("name", "")),
-                    "input": {},
+            yield (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": idx,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": _restore_tool_use_id(tu.get("toolUseId", "")),
+                        "name": _restore_tool_name(tu.get("name", "")),
+                        "input": {},
+                    },
                 },
-            }
+            )
         # For non-toolUse starts we defer until the first delta arrives,
         # since Bedrock doesn't tag the start with the block type. Some models
         # (kimi-k2-thinking) skip the start event entirely; the synthesis
@@ -396,25 +410,34 @@ def converse_stream_to_anthropic_events(event: dict, metadata: dict, state: dict
         if idx not in seen:
             seen.add(idx)
             if "reasoningContent" in delta:
-                yield "content_block_start", {
-                    "type": "content_block_start",
-                    "index": idx,
-                    "content_block": {"type": "thinking", "thinking": "", "signature": ""},
-                }
+                yield (
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": idx,
+                        "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+                    },
+                )
             elif "toolUse" in delta:
                 # Bedrock didn't send a typed start; we can't recover the tool
                 # name / id from a delta alone, so emit a best-effort start.
-                yield "content_block_start", {
-                    "type": "content_block_start",
-                    "index": idx,
-                    "content_block": {"type": "tool_use", "id": "", "name": "", "input": {}},
-                }
+                yield (
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": idx,
+                        "content_block": {"type": "tool_use", "id": "", "name": "", "input": {}},
+                    },
+                )
             else:
-                yield "content_block_start", {
-                    "type": "content_block_start",
-                    "index": idx,
-                    "content_block": {"type": "text", "text": ""},
-                }
+                yield (
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": idx,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                )
 
         if "text" in delta:
             text = delta["text"]
@@ -422,17 +445,23 @@ def converse_stream_to_anthropic_events(event: dict, metadata: dict, state: dict
                 if text[:1] == " ":
                     text = text[1:]
                 primed.add(idx)
-            yield "content_block_delta", {
-                "type": "content_block_delta",
-                "index": idx,
-                "delta": {"type": "text_delta", "text": text},
-            }
+            yield (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": idx,
+                    "delta": {"type": "text_delta", "text": text},
+                },
+            )
         elif "toolUse" in delta:
-            yield "content_block_delta", {
-                "type": "content_block_delta",
-                "index": idx,
-                "delta": {"type": "input_json_delta", "partial_json": delta["toolUse"].get("input", "")},
-            }
+            yield (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": idx,
+                    "delta": {"type": "input_json_delta", "partial_json": delta["toolUse"].get("input", "")},
+                },
+            )
         elif "reasoningContent" in delta:
             rc = delta["reasoningContent"]
             if "text" in rc:
@@ -441,42 +470,57 @@ def converse_stream_to_anthropic_events(event: dict, metadata: dict, state: dict
                     if rtext[:1] == " ":
                         rtext = rtext[1:]
                     primed.add(idx)
-                yield "content_block_delta", {
-                    "type": "content_block_delta",
-                    "index": idx,
-                    "delta": {"type": "thinking_delta", "thinking": rtext},
-                }
+                yield (
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": idx,
+                        "delta": {"type": "thinking_delta", "thinking": rtext},
+                    },
+                )
             if "signature" in rc:
-                yield "content_block_delta", {
-                    "type": "content_block_delta",
-                    "index": idx,
-                    "delta": {"type": "signature_delta", "signature": rc["signature"]},
-                }
+                yield (
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": idx,
+                        "delta": {"type": "signature_delta", "signature": rc["signature"]},
+                    },
+                )
 
     elif "contentBlockStop" in event:
         idx = event["contentBlockStop"].get("contentBlockIndex", 0)
-        yield "content_block_stop", {
-            "type": "content_block_stop",
-            "index": idx,
-        }
+        yield (
+            "content_block_stop",
+            {
+                "type": "content_block_stop",
+                "index": idx,
+            },
+        )
 
     elif "messageStop" in event:
         stop = event["messageStop"].get("stopReason", "end_turn")
-        yield "message_delta", {
-            "type": "message_delta",
-            "delta": {"stop_reason": _map_stop_reason(stop), "stop_sequence": None},
-            "usage": {"output_tokens": 0},
-        }
+        yield (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": _map_stop_reason(stop), "stop_sequence": None},
+                "usage": {"output_tokens": 0},
+            },
+        )
 
     elif "metadata" in event:
         usage = event["metadata"].get("usage", {})
-        yield "message_delta", {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {
-                "output_tokens": usage.get("outputTokens", 0),
+        yield (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {
+                    "output_tokens": usage.get("outputTokens", 0),
+                },
             },
-        }
+        )
 
 
 def _map_stop_reason(bedrock_reason: str) -> str:
@@ -491,4 +535,5 @@ def _map_stop_reason(bedrock_reason: str) -> str:
 
 def _short_id() -> str:
     import secrets
+
     return secrets.token_hex(12)

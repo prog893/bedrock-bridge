@@ -95,10 +95,12 @@ bedrock-bridge does not serve Claude models. Use Claude Code's native Bedrock mo
 ```bash
 git clone https://github.com/prog893/bedrock-bridge.git
 cd bedrock-bridge && uv venv && source .venv/bin/activate
-uv pip install -e .
+uv pip install -e '.[dev]'
+pytest
 ```
 
-`scripts/` contains dev-only probes ([scripts/README.md](./scripts/README.md)).
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the test layers, the pre-commit
+hook, and PR expectations.
 
 ## License
 

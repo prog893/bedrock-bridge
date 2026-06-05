@@ -10,6 +10,7 @@ For each model, probe four capabilities we care about in Claude Code:
 
 Writes a markdown table to stdout so the README can embed it.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,7 +18,7 @@ import struct
 import sys
 import time
 import zlib
-from typing import Callable
+from typing import Any, Callable
 
 import boto3
 
@@ -42,9 +43,10 @@ MODELS_TO_TEST = [
 ]
 
 
-def make_png(w: int = 48, h: int = 48, rgb=(0, 128, 255)) -> bytes:
-    def chunk(t, d):
+def make_png(w: int = 48, h: int = 48, rgb: tuple[int, int, int] = (0, 128, 255)) -> bytes:
+    def chunk(t: bytes, d: bytes) -> bytes:
         return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+
     sig = b"\x89PNG\r\n\x1a\n"
     return (
         sig
@@ -75,7 +77,7 @@ def _err_snippet(e: Exception, n: int = 140) -> str:
     return s[:n].replace("\n", " ").strip()
 
 
-def test_text(client, model_id: str):
+def probe_text(client: Any, model_id: str) -> bool:
     r = client.converse(
         modelId=model_id,
         messages=[{"role": "user", "content": [{"text": "Reply with exactly: PONG"}]}],
@@ -85,7 +87,7 @@ def test_text(client, model_id: str):
     return "PONG" in txt.upper() or bool(txt.strip())
 
 
-def test_tool_use(client, model_id: str):
+def probe_tool_use(client: Any, model_id: str) -> bool:
     r = client.converse(
         modelId=model_id,
         messages=[{"role": "user", "content": [{"text": "What's the weather in Tokyo? Use the tool."}]}],
@@ -95,21 +97,27 @@ def test_tool_use(client, model_id: str):
     return any("toolUse" in b for b in r["output"]["message"]["content"])
 
 
-def test_image_in_tool_result(client, model_id: str):
+def probe_image_in_tool_result(client: Any, model_id: str) -> bool:
     png = make_png()
-    r = client.converse(
+    client.converse(
         modelId=model_id,
         messages=[
             {"role": "user", "content": [{"text": "screenshot please"}]},
-            {"role": "assistant", "content": [
-                {"toolUse": {"toolUseId": "t1", "name": "screenshot", "input": {}}}
-            ]},
-            {"role": "user", "content": [
-                {"toolResult": {"toolUseId": "t1", "content": [
-                    {"text": "here it is:"},
-                    {"image": {"format": "png", "source": {"bytes": png}}},
-                ]}}
-            ]},
+            {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "screenshot", "input": {}}}]},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "t1",
+                            "content": [
+                                {"text": "here it is:"},
+                                {"image": {"format": "png", "source": {"bytes": png}}},
+                            ],
+                        }
+                    }
+                ],
+            },
         ],
         toolConfig={"tools": [SCREENSHOT_TOOL]},
         inferenceConfig={"maxTokens": 60},
@@ -117,7 +125,7 @@ def test_image_in_tool_result(client, model_id: str):
     return True  # if no exception raised, accepted
 
 
-def test_stream(client, model_id: str):
+def probe_stream(client: Any, model_id: str) -> bool:
     r = client.converse_stream(
         modelId=model_id,
         messages=[{"role": "user", "content": [{"text": "say hi"}]}],
@@ -129,14 +137,14 @@ def test_stream(client, model_id: str):
 
 
 TESTS: list[tuple[str, Callable]] = [
-    ("text", test_text),
-    ("tool_use", test_tool_use),
-    ("image_tr", test_image_in_tool_result),
-    ("stream", test_stream),
+    ("text", probe_text),
+    ("tool_use", probe_tool_use),
+    ("image_tr", probe_image_in_tool_result),
+    ("stream", probe_stream),
 ]
 
 
-def run(model_id: str, client) -> dict[str, str]:
+def run(model_id: str, client: Any) -> dict[str, str]:
     results: dict[str, str] = {}
     for name, fn in TESTS:
         try:
@@ -150,7 +158,7 @@ def run(model_id: str, client) -> dict[str, str]:
     return results
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--region", default=REGION_DEFAULT)
     ap.add_argument("--only", nargs="*", help="Restrict to these model IDs")
@@ -177,7 +185,8 @@ def main():
                 notes.append(f"{t}: {n}")
         note_col = notes[0] if notes else ""
         print(
-            f"| `{m:<{width-2}}` | {r['text']:<4} | {r['tool_use']:<8} | {r['image_tr']:<8} | {r['stream']:<6} | {note_col[:80]} |"
+            f"| `{m:<{width - 2}}` | {r['text']:<4} | {r['tool_use']:<8} | "
+            f"{r['image_tr']:<8} | {r['stream']:<6} | {note_col[:80]} |"
         )
         sys.stderr.write("done\n")
         if len(notes) > 1:
