@@ -1,0 +1,35 @@
+#!/bin/sh
+# Tracked pre-commit hook. Enable once per clone with:
+#   git config core.hooksPath scripts/git-hooks
+#
+# Runs the test suite before each commit. Resolves a Python that has pytest:
+# prefers a PYTEST env override, then the workspace-parent .venv used in
+# development, then whatever python3 is on PATH. If pytest is not installed
+# anywhere we can see, the hook skips rather than blocking the commit; tests
+# are a dev-time dependency (pip install -e '.[dev]'), not a runtime one.
+set -e
+
+repo_root=$(git rev-parse --show-toplevel)
+
+find_python() {
+    if [ -n "$PYTEST" ] && "$PYTEST" --version >/dev/null 2>&1; then
+        echo "$PYTEST"
+        return 0
+    fi
+    for py in "$repo_root/../.venv/bin/python" "$repo_root/.venv/bin/python" python3; do
+        if "$py" -c "import pytest" >/dev/null 2>&1; then
+            echo "$py -m pytest"
+            return 0
+        fi
+    done
+    return 1
+}
+
+runner=$(find_python) || {
+    echo "pre-commit: pytest not found; skipping tests (install with: pip install -e '.[dev]')" >&2
+    exit 0
+}
+
+echo "pre-commit: running tests via $runner" >&2
+# shellcheck disable=SC2086
+exec $runner -q "$repo_root/tests"
