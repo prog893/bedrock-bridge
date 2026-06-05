@@ -24,6 +24,20 @@ version = {attr = "bedrock_bridge.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/manual holds hand-run compatibility probes that emit a markdown report;
+# they have no pytest assertions, so never auto-collect them.
+norecursedirs = ["tests/manual"]
 markers = [
     "functional: hits a live bridge + real Bedrock (needs AWS creds; runs on pre-commit)",
 ]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "ANN"]
+# ANN401: allow explicit `Any` on args that are genuinely dynamic (boto3
+# clients, arbitrary JSON scrubbed for debug dumps); annotating them as Any is
+# honest, not lazy.
+ignore = ["ANN401"]

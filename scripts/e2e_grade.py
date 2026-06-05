@@ -5,7 +5,7 @@ Runs a target Bedrock model THROUGH the bridge (bedrock-bridge --model <id>
 --claude --print) to describe a committed, known image, then grades how close
 the description is to the ground-truth annotation using a separate, direct
 `claude -p` call (the judge bypasses the bridge on purpose: it must be a
-trusted, fixed reference, not the system under test).
+trusted, fixed reference that stays independent of the system under test).
 
 Exits nonzero if the score is below --threshold, so it can gate a PR. This is
 NOT part of the pytest suite and never runs on pre-commit: it costs tokens,
@@ -15,6 +15,7 @@ Usage:
   scripts/e2e_grade.py --model moonshotai.kimi-k2.5
   scripts/e2e_grade.py --model moonshotai.kimi-k2.5 --threshold 0.7 --json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -68,11 +69,26 @@ def describe_via_bridge(model: str, timeout: int) -> str:
         f"sentences. Name the specific subject and any colors or notable "
         f"features. Describe only what is actually visible."
     )
-    cmd = [BRIDGE, "--model", model, "--claude", "--print", prompt,
-           "--", "--dangerously-skip-permissions", "--no-session-persistence"]
+    cmd = [
+        BRIDGE,
+        "--model",
+        model,
+        "--claude",
+        "--print",
+        prompt,
+        "--",
+        "--dangerously-skip-permissions",
+        "--no-session-persistence",
+    ]
     try:
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           stdin=subprocess.DEVNULL, timeout=timeout, cwd=REPO_ROOT)
+        p = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+            cwd=REPO_ROOT,
+        )
     finally:
         _shutil.rmtree(tmpdir, ignore_errors=True)
     out = p.stdout.decode(errors="replace").strip()
@@ -98,10 +114,8 @@ def grade(description: str, timeout: int) -> dict:
         f"=== GROUND-TRUTH ANNOTATION ===\n{annotation}\n\n"
         f"=== DESCRIPTION TO GRADE ===\n{description}\n"
     )
-    cmd = [CLAUDE, "-p", judge_prompt, "--output-format", "json",
-           "--json-schema", json.dumps(GRADE_SCHEMA)]
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       stdin=subprocess.DEVNULL, timeout=timeout)
+    cmd = [CLAUDE, "-p", judge_prompt, "--output-format", "json", "--json-schema", json.dumps(GRADE_SCHEMA)]
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=timeout)
     raw = p.stdout.decode(errors="replace")
     if p.returncode != 0:
         raise RuntimeError(f"judge run failed (rc={p.returncode}):\n{raw}")
@@ -121,8 +135,9 @@ def grade(description: str, timeout: int) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description="E2E perception grader for a Bedrock model via the bridge.")
     ap.add_argument("--model", required=True, help="Bedrock model ID to test (must accept image input).")
-    ap.add_argument("--threshold", type=float, default=0.6,
-                    help="Minimum acceptable score (default: 0.6). Exit nonzero below this.")
+    ap.add_argument(
+        "--threshold", type=float, default=0.6, help="Minimum acceptable score (default: 0.6). Exit nonzero below this."
+    )
     ap.add_argument("--describe-timeout", type=int, default=240)
     ap.add_argument("--judge-timeout", type=int, default=120)
     ap.add_argument("--json", action="store_true", help="Emit the full grade as JSON.")
@@ -141,8 +156,11 @@ def main() -> int:
     score = float(result.get("score", 0.0))
 
     if args.json:
-        print(json.dumps({"model": args.model, "description": description,
-                          "threshold": args.threshold, **result}, indent=2))
+        print(
+            json.dumps(
+                {"model": args.model, "description": description, "threshold": args.threshold, **result}, indent=2
+            )
+        )
     else:
         print(f"\n=== grade for {args.model} ===")
         print(f"score:        {score:.2f}  (threshold {args.threshold:.2f})")
@@ -152,8 +170,10 @@ def main() -> int:
         print(f"reasoning:    {result.get('reasoning', '')}")
 
     passed = score >= args.threshold
-    print(f"\n{'PASS' if passed else 'FAIL'}: score {score:.2f} "
-          f"{'>=' if passed else '<'} threshold {args.threshold:.2f}", file=sys.stderr)
+    print(
+        f"\n{'PASS' if passed else 'FAIL'}: score {score:.2f} {'>=' if passed else '<'} threshold {args.threshold:.2f}",
+        file=sys.stderr,
+    )
     return 0 if passed else 1
 
 

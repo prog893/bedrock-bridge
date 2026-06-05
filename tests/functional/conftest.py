@@ -21,6 +21,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 
 import pytest
 
@@ -47,7 +48,7 @@ def _wait_for_port(port: int, timeout: float = 15.0) -> bool:
     return False
 
 
-def _post_json(url: str, payload: dict, timeout: float = 120.0):
+def _post_json(url: str, payload: dict, timeout: float = 120.0) -> tuple[int, dict]:
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
@@ -72,13 +73,13 @@ class BridgeClient:
     """Thin handle on a running proxy: where it lives, how to call it, and what
     its log file is (so a test can read the dumped failing-request path)."""
 
-    def __init__(self, base_url: str, log_path: str, text_only_model: str, text_image_model: str):
+    def __init__(self, base_url: str, log_path: str, text_only_model: str, text_image_model: str) -> None:
         self.base_url = base_url
         self.log_path = log_path
         self.text_only_model = text_only_model
         self.text_image_model = text_image_model
 
-    def messages(self, payload: dict, timeout: float = 120.0):
+    def messages(self, payload: dict, timeout: float = 120.0) -> tuple[int, dict]:
         payload.setdefault("model", self.text_only_model)
         return _post_json(self.base_url + "/v1/messages", payload, timeout=timeout)
 
@@ -87,11 +88,12 @@ def _require_aws() -> None:
     """Fail (not skip) if AWS is unreachable.
 
     Functional tests are mandatory: a machine that cannot reach AWS cannot
-    verify the bridge, and that is a failure to surface, not a condition to
-    paper over with a skip. The error names the cause so it is actionable.
+    verify the bridge, and that should surface as a failure rather than a
+    silent skip. The error names the cause so it is actionable.
     """
     try:
         import boto3
+
         boto3.client("sts", region_name=REGION).get_caller_identity()
     except Exception as e:
         raise RuntimeError(
@@ -101,30 +103,43 @@ def _require_aws() -> None:
         ) from e
 
 
-def _spawn_bridge(main_model: str, main_supports_vision: bool):
+def _spawn_bridge(main_model: str, main_supports_vision: bool) -> Iterator[BridgeClient]:
     """Start a proxy subprocess configured for one main model. Yields a
     BridgeClient; tears the subprocess down on exit."""
     port = _free_port()
-    log_path = os.path.join(
-        os.environ.get("TMPDIR", "/tmp"), f"bedrock-bridge-test-{port}.log"
-    )
+    log_path = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"bedrock-bridge-test-{port}.log")
     log_file = open(log_path, "w", buffering=1)
     env = {**os.environ, "AWS_REGION": REGION}
     proxy = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "bedrock_bridge.server:app",
-         "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
-        env=env, stdout=log_file, stderr=log_file,
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "bedrock_bridge.server:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ],
+        env=env,
+        stdout=log_file,
+        stderr=log_file,
     )
     try:
         if not _wait_for_port(port):
             raise RuntimeError(f"bridge proxy did not come up on port {port}")
         base = f"http://127.0.0.1:{port}"
-        status, _ = _post_json(base + "/set-model", {
-            "main_model_id": main_model,
-            "light_model_id": None,
-            "main_supports_vision": main_supports_vision,
-            "light_supports_vision": True,
-        })
+        status, _ = _post_json(
+            base + "/set-model",
+            {
+                "main_model_id": main_model,
+                "light_model_id": None,
+                "main_supports_vision": main_supports_vision,
+                "light_supports_vision": True,
+            },
+        )
         assert status == 200, f"/set-model returned {status}"
         yield BridgeClient(base, log_path, TEXT_ONLY_MODEL, TEXT_IMAGE_MODEL)
     finally:

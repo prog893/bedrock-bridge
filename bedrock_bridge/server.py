@@ -5,18 +5,20 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import AsyncIterator
+from typing import Any
 
 import boto3
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from . import __version__
 from .translate import (
     anthropic_to_converse,
-    converse_to_anthropic,
     converse_stream_to_anthropic_events,
+    converse_to_anthropic,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -28,10 +30,11 @@ _client = None
 _region = None
 
 
-def get_client():
+def get_client() -> Any:
     global _client, _region
     if _client is None:
         from botocore.config import Config
+
         # Tag the User-Agent so bridge calls are identifiable in CloudTrail.
         ua = f"bedrock-bridge/{__version__}"
         # More generous read timeout than botocore's 60s default; keep connect
@@ -57,13 +60,13 @@ _main_supports_vision: bool = True
 _light_supports_vision: bool = True
 
 
-def set_main_model(model_id: str):
+def set_main_model(model_id: str) -> None:
     """Set the Bedrock model ID for primary requests."""
     global _main_model
     _main_model = model_id
 
 
-def set_light_model(model_id: str | None):
+def set_light_model(model_id: str | None) -> None:
     """Set the Bedrock model ID for light/background-helper requests."""
     global _light_model
     _light_model = model_id
@@ -232,10 +235,14 @@ def _format_error(err: str, body: dict | None) -> tuple[int, str, str]:
     # per-model output cap to clamp at preflight, so there's no auto-recovery;
     # surface it plainly.
     if "maximum tokens you requested exceeds" in low:
-        return 400, "invalid_request_error", (
-            f"[bedrock-bridge] {err} The configured model caps output tokens "
-            f"below what the client requested. Pick a model with a higher "
-            f"output limit, or lower the client's max-tokens setting."
+        return (
+            400,
+            "invalid_request_error",
+            (
+                f"[bedrock-bridge] {err} The configured model caps output tokens "
+                f"below what the client requested. Pick a model with a higher "
+                f"output limit, or lower the client's max-tokens setting."
+            ),
         )
 
     # Per-image size cap -> Claude Code's per-image strip-and-retry path.
@@ -273,9 +280,13 @@ def _format_error(err: str, body: dict | None) -> tuple[int, str, str]:
     # appends its own "server-side issue, check your inference gateway" tail
     # to 500s (hardcoded, not editable here), so we lead with the actionable
     # bit: this is likely a bridge translation gap, report it.
-    return 500, "api_error", (
-        f"[bedrock-bridge] {err} | If this looks like a bridge bug, report it: "
-        f"https://github.com/prog893/bedrock-bridge/issues"
+    return (
+        500,
+        "api_error",
+        (
+            f"[bedrock-bridge] {err} | If this looks like a bridge bug, report it: "
+            f"https://github.com/prog893/bedrock-bridge/issues"
+        ),
     )
 
 
@@ -304,7 +315,7 @@ def _route(model_alias: str) -> str:
     return model_alias
 
 
-async def messages(request: Request):
+async def messages(request: Request) -> Response:
     body = await request.json()
     stream = body.get("stream", False)
 
@@ -312,10 +323,7 @@ async def messages(request: Request):
     model_id = _route(model_alias)
 
     raw_tools = body.get("tools", [])
-    logger.info(
-        f"-> model_in={model_alias} -> routed={model_id} stream={stream} "
-        f"tools={len(raw_tools)}"
-    )
+    logger.info(f"-> model_in={model_alias} -> routed={model_id} stream={stream} tools={len(raw_tools)}")
     # History-recall fixup: when Claude Code recalls a prior turn from
     # history, it resends the `[Image #N]` chip text but does not preserve
     # the image bytes. Native Claude reads the bare chip and refuses
@@ -337,9 +345,7 @@ async def messages(request: Request):
     # images on this configuration.
     if not _route_supports_vision(model_id) and _has_image_content(body):
         n = _strip_images_from_body(body)
-        logger.info(
-            f"vision adapt: stripped {n} image block(s) for non-vision model {model_id}"
-        )
+        logger.info(f"vision adapt: stripped {n} image block(s) for non-vision model {model_id}")
 
     converse_kwargs, metadata = anthropic_to_converse(body)
     metadata["model"] = model_alias
@@ -380,7 +386,9 @@ async def messages(request: Request):
         )
 
 
-async def _stream_response(client, model_id: str, kwargs: dict, metadata: dict, body: dict | None = None):
+async def _stream_response(
+    client: Any, model_id: str, kwargs: dict, metadata: dict, body: dict | None = None
+) -> AsyncIterator[str]:
     """Call converse_stream and yield Anthropic SSE events."""
     try:
         response = client.converse_stream(modelId=model_id, **kwargs)
@@ -404,14 +412,18 @@ async def _stream_response(client, model_id: str, kwargs: dict, metadata: dict, 
             except Exception as dump_err:
                 logger.warning(f"failed to dump failure: {dump_err}")
         _, err_type, message = _format_error(err_str, body)
-        yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'type': err_type, 'message': message}})}\n\n"
+        payload = {"type": "error", "error": {"type": err_type, "message": message}}
+        yield f"event: error\ndata: {json.dumps(payload)}\n\n"
 
 
-def _dump_failure(body: dict, kwargs: dict, err: str):
+def _dump_failure(body: dict, kwargs: dict, err: str) -> None:
     """Persist a scrubbed copy of a failing request for offline debugging."""
-    import datetime, os, tempfile, uuid
+    import datetime
+    import os
+    import tempfile
+    import uuid
 
-    def scrub(obj):
+    def scrub(obj: Any) -> Any:
         if isinstance(obj, dict):
             return {k: scrub(v) for k, v in obj.items()}
         if isinstance(obj, list):
@@ -429,7 +441,7 @@ def _dump_failure(body: dict, kwargs: dict, err: str):
     logger.error(f"dumped failing request to {path}")
 
 
-async def set_model(request: Request):
+async def set_model(request: Request) -> Response:
     body = await request.json()
     main = body.get("main_model_id") or body.get("model_id", "")
     light = body.get("light_model_id")
@@ -438,32 +450,34 @@ async def set_model(request: Request):
     set_main_model(main)
     set_light_model(light)
     set_capabilities(main_vision, light_vision)
-    logger.info(
-        f"Models set: main={main} (vision={main_vision}) "
-        f"light={light or 'none'} (vision={light_vision})"
+    logger.info(f"Models set: main={main} (vision={main_vision}) light={light or 'none'} (vision={light_vision})")
+    return JSONResponse(
+        {
+            "status": "ok",
+            "main_model_id": main,
+            "light_model_id": light,
+            "main_supports_vision": main_vision,
+            "light_supports_vision": light_vision,
+        }
     )
-    return JSONResponse({
-        "status": "ok",
-        "main_model_id": main, "light_model_id": light,
-        "main_supports_vision": main_vision, "light_supports_vision": light_vision,
-    })
 
 
-async def health(request: Request):
+async def health(request: Request) -> Response:
     return JSONResponse({"status": "ok"})
 
 
-async def list_models(request: Request):
+async def list_models(request: Request) -> Response:
     """Stub Anthropic models endpoint so Claude Code's discovery call passes."""
+    created = "2025-01-01T00:00:00Z"
     items = []
     if _main_model:
-        items.append({"id": _main_model, "display_name": _main_model, "type": "model", "created_at": "2025-01-01T00:00:00Z"})
+        items.append({"id": _main_model, "display_name": _main_model, "type": "model", "created_at": created})
     if _light_model:
-        items.append({"id": _light_model, "display_name": _light_model, "type": "model", "created_at": "2025-01-01T00:00:00Z"})
+        items.append({"id": _light_model, "display_name": _light_model, "type": "model", "created_at": created})
     return JSONResponse({"data": items})
 
 
-async def complete(request: Request):
+async def complete(request: Request) -> Response:
     """Handle legacy complete endpoint."""
     return JSONResponse(
         {"error": {"type": "not_supported", "message": "Use /v1/messages"}},

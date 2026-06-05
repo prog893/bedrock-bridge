@@ -12,6 +12,7 @@ Examples:
     probe_tool_use.py minimax.minimax-m2.5
     probe_tool_use.py moonshotai.kimi-k2.5 --region ap-northeast-1
 """
+
 from __future__ import annotations
 
 import argparse
@@ -19,7 +20,6 @@ import json
 import sys
 
 import boto3
-
 
 TOOL = {
     "toolSpec": {
@@ -40,13 +40,11 @@ TOOL = {
 
 USER_TURN = {
     "role": "user",
-    "content": [
-        {"text": "What's the weather in Tokyo in celsius? Use the get_weather tool."}
-    ],
+    "content": [{"text": "What's the weather in Tokyo in celsius? Use the get_weather tool."}],
 }
 
 
-def main():
+def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("model_id")
     p.add_argument("--region", default="ap-northeast-1")
