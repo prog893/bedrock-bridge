@@ -137,6 +137,69 @@ def test_long_tool_name_shortened_and_restored():
     assert translate._restore_tool_name(short) == long_name
 
 
+# Some models (Kimi) emit tool names/IDs with chat-template tokens leaked in
+# (spaces, "<|...|>"), violating Bedrock's charset even when under the length
+# cap. A short-but-illegal value must still be rewritten, and round-trip.
+def test_illegal_charset_tool_name_shortened_even_when_short():
+    bad_name = "tool with spaces"  # short, but space is illegal for names
+    short = translate._shorten_tool_name(bad_name)
+    assert translate._NAME_ILLEGAL.search(short) is None
+    assert translate._restore_tool_name(short) == bad_name
+
+
+def test_illegal_charset_tool_use_id_shortened_even_when_short():
+    bad_id = "call<|tool|> 7"  # short, but "<", "|", ">", " " are illegal for IDs
+    short = translate._shorten_tool_use_id(bad_id)
+    assert translate._ID_ILLEGAL.search(short) is None
+    assert translate._restore_tool_use_id(short) == bad_id
+
+
+# A tool_use and its matching tool_result must resolve to the same shortened
+# id, so Bedrock can pair them. (messages.N.toolUse / messages.N+1.toolResult)
+def test_tool_use_and_result_share_shortened_id():
+    raw_id = "functions.mcp__server__some_tool:" + "1" * 80
+    body = {
+        "model": "m",
+        "messages": [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": raw_id, "name": "t", "input": {}}]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": raw_id, "content": "ok"}]},
+        ],
+    }
+    msgs = _converted_messages(body)
+    use_id = msgs[0]["content"][0]["toolUse"]["toolUseId"]
+    res_id = msgs[1]["content"][0]["toolResult"]["toolUseId"]
+    assert use_id == res_id
+    assert len(use_id) <= 64
+
+
+# A real image's base64 payload must decode to raw bytes for Bedrock (which
+# wants bytes, not base64). 1x1 red PNG; we know exactly what it is.
+_RED_PIXEL_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA"
+    "DUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def test_image_base64_decoded_to_bytes():
+    import base64 as _b64
+    body = {
+        "model": "m",
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": "image/png",
+                    "data": _RED_PIXEL_PNG_B64}}]},
+        ],
+    }
+    msgs = _converted_messages(body)
+    img = msgs[0]["content"][0]["image"]
+    assert img["format"] == "png"
+    assert img["source"]["bytes"] == _b64.b64decode(_RED_PIXEL_PNG_B64)
+    assert isinstance(img["source"]["bytes"], (bytes, bytearray))
+
+
 # kimi-k2 and similar skip contentBlockStart for text/reasoning. The translator
 # must synthesize a content_block_start on the first delta of an unseen index,
 # else Claude Code renders reasoning as plain text.
