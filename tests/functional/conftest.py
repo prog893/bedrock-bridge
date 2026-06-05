@@ -73,15 +73,27 @@ class BridgeClient:
     """Thin handle on a running proxy: where it lives, how to call it, and what
     its log file is (so a test can read the dumped failing-request path)."""
 
-    def __init__(self, base_url: str, log_path: str, text_only_model: str, text_image_model: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        log_path: str,
+        default_model: str,
+        text_only_model: str,
+        text_image_model: str,
+    ) -> None:
         self.base_url = base_url
         self.log_path = log_path
+        # The model this proxy actually spawned with; a payload that omits
+        # "model" defaults to it, so image tests on bridge_image hit the
+        # image-capable main model rather than silently falling back to text.
+        self.default_model = default_model
         self.text_only_model = text_only_model
         self.text_image_model = text_image_model
 
     def messages(self, payload: dict, timeout: float = 120.0) -> tuple[int, dict]:
-        payload.setdefault("model", self.text_only_model)
-        return _post_json(self.base_url + "/v1/messages", payload, timeout=timeout)
+        body = dict(payload)
+        body.setdefault("model", self.default_model)
+        return _post_json(self.base_url + "/v1/messages", body, timeout=timeout)
 
 
 def _require_aws() -> None:
@@ -141,7 +153,7 @@ def _spawn_bridge(main_model: str, main_supports_vision: bool) -> Iterator[Bridg
             },
         )
         assert status == 200, f"/set-model returned {status}"
-        yield BridgeClient(base, log_path, TEXT_ONLY_MODEL, TEXT_IMAGE_MODEL)
+        yield BridgeClient(base, log_path, main_model, TEXT_ONLY_MODEL, TEXT_IMAGE_MODEL)
     finally:
         proxy.terminate()
         try:

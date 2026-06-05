@@ -104,7 +104,6 @@ def test_image_to_text_only_model_is_stripped(bridge: BridgeClient) -> None:
 def test_image_in_tool_result_roundtrips_on_image_model(bridge_image: BridgeClient) -> None:
     status, body = bridge_image.messages(
         {
-            "model": bridge_image.text_image_model,
             "max_tokens": 64,
             # Bedrock requires toolConfig whenever messages carry toolUse/toolResult
             # blocks; Claude Code always sends the tools array, so the test does too.
