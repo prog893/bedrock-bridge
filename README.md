@@ -95,18 +95,12 @@ bedrock-bridge does not serve Claude models. Use Claude Code's native Bedrock mo
 ```bash
 git clone https://github.com/prog893/bedrock-bridge.git
 cd bedrock-bridge && uv venv && source .venv/bin/activate
-uv pip install -e '.[dev]'        # [dev] pulls in pytest
-pytest                            # run the regression suite
-git config core.hooksPath scripts/git-hooks   # run tests on every commit
+uv pip install -e '.[dev]'
+pytest
 ```
 
-The `[dev]` extra adds pytest; runtime installs (including the Homebrew
-formula) never pull it in. `tests/` holds regression cases keyed to past
-Bedrock-shape rejections. The tracked pre-commit hook in `scripts/git-hooks`
-runs them before each commit; enabling it is the one-time `core.hooksPath`
-step above (it skips cleanly if pytest is not installed).
-
-`scripts/` contains dev-only probes ([scripts/README.md](./scripts/README.md)).
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the test layers, the pre-commit
+hook, and PR expectations.
 
 ## License
 

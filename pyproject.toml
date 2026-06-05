@@ -24,3 +24,6 @@ version = {attr = "bedrock_bridge.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "functional: hits a live bridge + real Bedrock (needs AWS creds; runs on pre-commit)",
+]

@@ -2,11 +2,20 @@
 # Tracked pre-commit hook. Enable once per clone with:
 #   git config core.hooksPath scripts/git-hooks
 #
-# Runs the test suite before each commit. Resolves a Python that has pytest:
-# prefers a PYTEST env override, then the workspace-parent .venv used in
-# development, then whatever python3 is on PATH. If pytest is not installed
-# anywhere we can see, the hook skips rather than blocking the commit; tests
-# are a dev-time dependency (pip install -e '.[dev]'), not a runtime one.
+# Runs tests/ before each commit: the pure offline suite plus the functional
+# suite (which hits real Bedrock through a spawned bridge). Functional tests
+# are mandatory and hard-fail when AWS is unreachable; that is deliberate, a
+# machine that cannot verify the bridge should not be committing to it. To
+# commit offline on purpose, run the offline subset yourself and bypass the
+# hook for that commit: pytest -m 'not functional' && git commit --no-verify.
+# The e2e output-distance grader lives in scripts/ (not tests/), so it is NOT
+# collected here; run it by hand or per the PR checklist (it costs tokens and
+# needs Claude Code).
+#
+# Resolves a Python that has pytest: prefers a PYTEST env override, then the
+# workspace-parent .venv used in development, then python3 on PATH. If pytest
+# is not installed anywhere we can see, the hook skips rather than blocking the
+# commit; tests are a dev-time dependency (pip install -e '.[dev]').
 set -e
 
 repo_root=$(git rev-parse --show-toplevel)
