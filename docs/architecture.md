@@ -69,11 +69,22 @@ The substring fallback covers Anthropic-API clients that emit native Anthropic m
 
 - **Tool name and use-ID shortening.** Bedrock Converse rejects tool names or `toolUseId` values longer than 64 characters. Claude Code emits MCP tool names like `mcp__aws-billing-cost-management__list-cost-allocation-tag-backfill-history` that exceed this. We shorten to `prefix[:55] + "_" + sha256[:8]` and keep a bidirectional in-memory map so the matching `toolResult` block references the same shortened ID, then restore the original on the way back.
 - **Image blocks.** Anthropic sends `{source.type: "base64", data: "<str>"}`; Bedrock wants raw `bytes`. We `base64.b64decode` and normalize `image/jpg` to `jpeg` (Bedrock rejects `jpg`).
-- **Image hoisting from `tool_result`.** Some Bedrock models reject images nested inside `toolResult.content`. We hoist any image blocks out of tool-result content into a sibling user-message position before sending. Vision-capable models still see the image; non-vision models reject it (with a clear error), which is the correct behavior.
+- **Image hoisting from `tool_result`.** Some Bedrock models reject images nested inside `toolResult.content`. We hoist any image blocks out of tool-result content into a sibling user-message position before sending. Vision-capable models still see the image; for text-only models the image is adapted before send (see "Vision adaptation" below).
 - **`stop_sequences` is dropped.** Every non-Anthropic Bedrock model rejects `stopSequences` with `ValidationException: This model doesn't support the stopSequences field`. The bridge does not serve Anthropic targets (preflight refuses them; see "Refusal" below), so the field is dropped unconditionally.
 - **Server-side Anthropic tools are dropped.** Anthropic's hosted tools (`web_search_*`, `computer_*`, `bash_*`, `text_editor_*`) execute on Anthropic's servers and have no Bedrock equivalent. We strip them from the `tools` list. If that leaves the list empty, `toolConfig` is omitted (Bedrock rejects an empty tool list).
 - **Streaming.** Bedrock `converse_stream` produces a different event shape than Anthropic SSE. `converse_stream_to_anthropic_events` translates each Converse stream chunk into the matching Anthropic events (`message_start`, `content_block_*`, `message_delta`, etc.) and the proxy emits them as SSE.
 - **Thinking / reasoning blocks.** Models like Kimi K2 Thinking and Anthropic's extended-thinking models emit reasoning content in `output.message.content[*].reasoningContent`. We translate those to Anthropic `thinking` blocks in the response.
+
+## Vision adaptation
+
+A text-only main model cannot accept image input. `server.messages` detects this (the routed model's IMAGE modality flag, set at preflight) and adapts the body before send. There are two paths:
+
+- **No `--vision-model` configured.** `_strip_images_from_body` replaces each image block with a text marker telling the model to inform the user that images need a vision model and how to enable one. The turn is forwarded so the session continues.
+- **`--vision-model` configured.** `_stash_images_for_describe` replaces each image with a `describe_image` marker carrying a content-derived handle (`img-` + sha256 prefix, not a sequential index), and stashes the real Bedrock image block in a per-request `handle -> block` map. A `describe_image` toolSpec is injected into the main model's `toolConfig`; this tool is never exposed to Claude Code. `_run_describe_loop` then drives the main model non-streaming: when it calls `describe_image`, the bridge runs the vision model (`_call_vision_model`) on the stashed bytes with the model's `prompt`, returns the description as a `toolResult` framed as a second-hand text rendering (`_describe_result_text`), and re-invokes. Any non-`describe_image` tool call in the same assistant turn is discarded; the model re-decides with the descriptions now in context. The loop ends on the first turn with no `describe_image` call (capped at `_MAX_DESCRIBE_ROUNDS`).
+
+Because the describe loop must inspect each assistant turn before deciding to continue, it runs non-streaming even when the client asked to stream. `_buffered_message_to_sse` replays the final buffered message as the Anthropic SSE event sequence so a streaming client still gets a stream. The common no-image path streams directly from Bedrock.
+
+If the main model is itself image-capable but `--vision-model` is set, preflight treats main as text-only (with a warning) so images route to the vision model.
 
 ## Startup output
 

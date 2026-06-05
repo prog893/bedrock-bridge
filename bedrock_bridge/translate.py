@@ -118,7 +118,7 @@ def anthropic_to_converse(body: dict) -> tuple[dict, dict]:
     return kwargs, metadata
 
 
-def _anthropic_image_to_bedrock(block: dict) -> dict | None:
+def anthropic_image_to_bedrock(block: dict) -> dict | None:
     """Convert an Anthropic image block → Bedrock image block. None if unsupported."""
     source = block.get("source", {})
     if source.get("type") != "base64":
@@ -151,7 +151,7 @@ def _convert_tool_result_content(content: Any) -> list[dict]:
             if text:
                 out.append({"text": text})
         elif btype == "image":
-            img = _anthropic_image_to_bedrock(b)
+            img = anthropic_image_to_bedrock(b)
             if img is not None:
                 out.append(img)
         elif btype == "json":
@@ -202,7 +202,7 @@ def _convert_message(msg: dict) -> dict:
                 }
             )
         elif btype == "image":
-            img = _anthropic_image_to_bedrock(block)
+            img = anthropic_image_to_bedrock(block)
             if img is not None:
                 blocks.append(img)
         elif btype == "thinking":

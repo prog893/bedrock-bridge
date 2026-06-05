@@ -22,14 +22,20 @@ bedrock-bridge -m moonshotai.kimi-k2.5 --model-light minimax.minimax-m2.5 --clau
 
 # Just run the proxy; wire your own client
 bedrock-bridge --model moonshotai.kimi-k2.5
+
+# Text-only main model, with a vision model for images
+bedrock-bridge -m deepseek.v3.2 --vision-model qwen.qwen3-vl-235b-a22b --claude
 ```
 
 | Slot | Env var | CLI flag |
 |------|---------|----------|
 | Main (required) | `BEDROCK_BRIDGE_MODEL` | `--model` / `-m` |
 | Light (optional) | `BEDROCK_BRIDGE_MODEL_LIGHT` | `--model-light` |
+| Vision (optional) | `BEDROCK_BRIDGE_MODEL_VISION` | `--vision-model` |
 
 The light slot is for background tasks Claude Code dispatches to a smaller model. If no light model is configured, all requests route to the main model.
+
+The vision slot lets a text-only main model work with images. When set, the bridge inspects each attached image with this image-capable model and feeds the result back through a `describe_image` tool the main model can call (see [Images](#images)). If the main model is itself image-capable, setting `--vision-model` routes images to the vision model anyway and treats main as text-only.
 
 Claude Code's auto-mode safety classifier works through the bridge. With a light slot configured it runs there; without one it falls through to the main model.
 
@@ -81,8 +87,18 @@ bedrock-bridge does not serve Claude models. Use Claude Code's native Bedrock mo
 
 - macOS only.
 - Bedrock models have a request body size cap, limiting the amount of data sendable in one request. When the cap is hit, Claude Code's TUI shows "Context limit reached · /compact or /clear to continue" and the session pauses. Run `/compact` to summarize old turns and continue, or `/clear` to start fresh. Common trigger: many large tool_result blocks (parallel screenshots, big file reads) accumulated across turns.
-- On non-vision models, the bridge replaces image blocks with an explicit text marker before forwarding to Bedrock so the request still validates and the model gets a clear "image cannot be shown" signal. The model is instructed to tell the user images are not supported. Use a vision-capable main model when working with images.
+- Image handling on a text-only main model depends on whether `--vision-model` is set; see [Images](#images).
 - Claude Code's `/model` command is not supported. Every request routes to the model configured at bridge startup; in-session model swaps have no effect. Restart the bridge with a different `--model` to switch.
+
+## Images
+
+A text-only Bedrock model cannot accept image input. How the bridge handles an attached image depends on whether a vision slot is configured.
+
+**With `--vision-model` set.** Each image is held by the bridge and replaced, in the text the main model sees, with a short marker noting that the image is inspectable. The bridge injects a `describe_image` tool (visible only to the main model, never to Claude Code). When the main model wants to see an image it calls `describe_image` with a handle and a prompt stating what it needs to know; the bridge runs the vision model on the real image bytes with that prompt and returns the description as the tool result. The description is a second-hand text rendering produced by another model for a specific question, not the image loaded into the main model's context. The result is framed to make that explicit, so the main model does not treat it as if it had seen the image directly.
+
+**Without a vision slot.** Each image is replaced with a text marker telling the model to inform the user that images need a vision model, and that they can restart the bridge with `--vision-model <image-capable-model-id>` (or set `$BEDROCK_BRIDGE_MODEL_VISION`) to enable image support. The request still goes through so the session continues normally.
+
+In both cases the bridge forwards the turn rather than rejecting it: a rejection would leave the image in Claude Code's transcript, which then re-sends it on every following turn.
 
 ## Docs
 
