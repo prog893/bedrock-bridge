@@ -13,7 +13,7 @@ from bedrock_bridge.translate import (
 )
 
 
-def _converted_messages(body):
+def _converted_messages(body: dict) -> list[dict]:
     kwargs, _ = anthropic_to_converse(body)
     return kwargs["messages"]
 
