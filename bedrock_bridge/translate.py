@@ -18,6 +18,12 @@ _BEDROCK_ID_LIMIT = 64
 _NAME_ILLEGAL = re.compile(r"[^a-zA-Z0-9_-]")
 _ID_ILLEGAL = re.compile(r"[^a-zA-Z0-9_.:-]")
 
+# Bedrock rejects blank text blocks ("The text field in the ContentBlock
+# object ... is blank"). When we must emit a placeholder for a turn that was
+# otherwise empty (e.g. an interrupted assistant turn that arrived as nothing
+# but empty text blocks), use a non-blank marker so the request still validates.
+_EMPTY_TEXT_PLACEHOLDER = "[empty]"
+
 # Bidirectional tool name mapping
 _name_to_short: dict[str, str] = {}
 _short_to_name: dict[str, str] = {}
@@ -137,7 +143,7 @@ def _convert_tool_result_content(content) -> list[dict]:
     the follow-up message doesn't end up with an empty content list.
     """
     if isinstance(content, str):
-        return [{"text": content}] if content else [{"text": ""}]
+        return [{"text": content}] if content else [{"text": _EMPTY_TEXT_PLACEHOLDER}]
 
     out: list[dict] = []
     for b in content or []:
@@ -153,10 +159,10 @@ def _convert_tool_result_content(content) -> list[dict]:
         elif btype == "json":
             out.append({"json": b.get("json", {})})
         # Unknown block types are dropped; Bedrock would reject them anyway.
-    # Bedrock rejects an empty content list. Fall back to a single empty text
-    # block so the request still validates.
+    # Bedrock rejects an empty content list. Fall back to a single placeholder
+    # text block so the request still validates.
     if not out:
-        out.append({"text": ""})
+        out.append({"text": _EMPTY_TEXT_PLACEHOLDER})
     return out
 
 
@@ -216,10 +222,11 @@ def _convert_message(msg: dict) -> dict:
         # Other unknown block types are dropped on the way to Bedrock.
 
     # Bedrock rejects messages with no content. If we dropped everything (e.g.
-    # assistant turn that was nothing but a `thinking` block), fall back to a
-    # placeholder so the request still validates.
+    # assistant turn that was nothing but a `thinking` block, or an interrupted
+    # turn that arrived as only empty text blocks), fall back to a placeholder
+    # so the request still validates.
     if not blocks:
-        blocks.append({"text": ""})
+        blocks.append({"text": _EMPTY_TEXT_PLACEHOLDER})
 
     # Some Bedrock-hosted models (Kimi K2.5, MiniMax) accept image blocks at
     # the top level of a user message but reject them inside toolResult.content.
@@ -240,7 +247,7 @@ def _convert_message(msg: dict) -> dict:
                 else:
                     new_content.append(sub)
             if not new_content:
-                new_content.append({"text": ""})
+                new_content.append({"text": _EMPTY_TEXT_PLACEHOLDER})
             tr["content"] = new_content
         blocks.extend(hoisted)
 
