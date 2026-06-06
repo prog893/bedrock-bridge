@@ -86,6 +86,38 @@ Because the describe loop must inspect each assistant turn before deciding to co
 
 If the main model is itself image-capable but `--vision-model` is set, preflight treats main as text-only (with a warning) so images route to the vision model.
 
+### Who calls `describe_image` (and why no tool card shows)
+
+The describe path is non-obvious because three actors are involved, and `describe_image` is a contract between only two of them:
+
+1. **Claude Code** (the client). Speaks the Anthropic Messages API; sends its own `tools` list. It is the outer agent and never learns `describe_image` exists.
+2. **The main model** (e.g. minimax). The model the bridge routes Claude Code's request to. This is the actor that emits `describe_image` tool calls.
+3. **The vision model** (e.g. qwen-vl). A side channel the bridge invokes directly; never in the conversation.
+
+The mechanic is append-then-intercept-and-hide:
+
+- **Append (inbound).** The bridge takes Claude Code's `tools`, translates them to a Bedrock `toolConfig`, and appends the `describe_image` toolSpec to that list (the union; Claude Code's real tools are untouched). The image block is swapped for a text marker naming the handle. Claude Code's request object is never told about either change.
+- **Intercept (outbound).** `_run_describe_loop` scans the main model's response for tool calls named exactly `describe_image`. Those it fulfills itself (run the vision model, feed the `toolResult` back, loop). Any *real* tool call (one of Claude Code's tools) is left to flow back to Claude Code normally.
+- **Hide.** The whole loop resolves inside the single request handler, so from Claude Code's side it is one request in, one final assistant message out. No `describe_image` block ever reaches Claude Code (and `_strip_describe_blocks` removes any leftover on the fallback paths).
+
+This is why no tool-use card appears in the Claude Code transcript: a card requires the client to have registered the tool and to execute it across a follow-up request, but `describe_image` is registered with the main model only and fulfilled server-side. The user sees the main model's final prose, composed from the vision description; the inspection is folded into that prose rather than surfaced as a discrete step.
+
+It also means the prompt sent to the vision model is authored by the *main model*. The main model reads the marker, decides whether it needs to look, and writes a prompt targeting the user's actual question (so a follow-up like "what are the hex colors" produces a different vision prompt than "explain this image"). The bridge only pairs that prompt with the real bytes and a fixed inspector system prompt. The bridge log is the sole place this exchange is visible: `_run_describe_loop` logs each round's requested calls and prompts, and each vision-model invocation.
+
+```
+Claude Code ──Messages: "explain this image" (+ its own tools)──▶ bridge
+                                                                    │
+                                                                    │  one handler call (_run_describe_loop):
+                                                                    │   append describe_image to toolConfig; image -> marker
+                                                                    │   ├─ Converse ▶ main model   (real tools + describe_image + marker)
+                                                                    │   ◀─ main: toolUse describe_image(handle, "describe what you see")
+                                                                    │   ├─ Converse ▶ vision model (real bytes + that prompt)
+                                                                    │   ◀─ vision: "OpenAI region screenshot..."
+                                                                    │   ├─ Converse ▶ main model   (toolResult = that text)
+                                                                    │   ◀─ main: final answer, no more describe_image calls
+Claude Code ◀──Messages response: final text (describe_image stripped)── bridge
+```
+
 ## Startup output
 
 ```

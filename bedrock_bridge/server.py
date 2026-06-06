@@ -290,7 +290,10 @@ def _describe_tool_spec() -> dict:
                 "image_handle from the bracketed bedrock-bridge marker, and a "
                 "prompt describing what you need to know (what to classify, "
                 "debug, read, or extract). The result is a text description "
-                "only; you are not seeing the image yourself."
+                "only; you are not seeing the image yourself. You may call this "
+                "tool multiple times on the same image_handle with different "
+                "prompts to inspect different aspects; do so whenever you need "
+                "detail you have not already obtained, rather than guessing."
             ),
             "inputSchema": {
                 "json": {
@@ -315,11 +318,14 @@ def _describe_tool_spec() -> dict:
 
 
 _VISION_SYSTEM_PROMPT = (
-    "You are an image-inspection tool. Look at the image and answer the "
-    "request as precisely as you can, describing only what is actually "
-    "visible. If something asked for cannot be determined from the image, say "
-    "so plainly. Do not speculate about intent or invent details that are not "
-    "present."
+    "You are the eyes for another AI model that cannot see this image; it will "
+    "act on your words as its only source of truth, so be concrete and "
+    "complete. Always begin with one sentence naming what kind of image this is "
+    "(for example: a photograph, a screenshot of a UI, a diagram, a document "
+    "scan, a chart), then transcribe any prominent text verbatim, including "
+    "non-English text. After that, answer the specific request. Describe only "
+    "what is actually visible; if something asked for cannot be determined, say "
+    "so plainly. Do not guess at intent or invent details that are not present."
 )
 
 
@@ -358,7 +364,9 @@ def _describe_result_text(prompt: str | None, handle: str, answer: str, ok: bool
         f"[bedrock-bridge describe_image: the vision model ({_vision_model}) "
         f'was asked for "{asked}" and returned the following. This is a '
         f"text description produced by another model, not the image itself, so "
-        f"treat it as second-hand and possibly incomplete.\n\n{answer}]"
+        f"treat it as second-hand. The answer is scoped to that question and "
+        f"may omit other details in the image; if you need a different aspect, "
+        f"call describe_image again with a new prompt.\n\n{answer}]"
     )
 
 
@@ -393,7 +401,7 @@ def _run_describe_loop(client: Any, model_id: str, kwargs: dict, metadata: dict,
     # legitimately new work; only an identical re-request signals a loop.
     answered: dict[tuple[str, str | None], tuple[str, bool]] = {}
 
-    for _ in range(_MAX_DESCRIBE_ROUNDS):
+    for round_n in range(_MAX_DESCRIBE_ROUNDS):
         response = client.converse(modelId=model_id, **kwargs)
         blocks = response.get("output", {}).get("message", {}).get("content", [])
 
@@ -403,7 +411,12 @@ def _run_describe_loop(client: Any, model_id: str, kwargs: dict, metadata: dict,
             if isinstance(b, dict) and b.get("toolUse", {}).get("name") == DESCRIBE_TOOL_NAME
         ]
         if not describe_calls:
+            # Main model produced its turn without asking to inspect any image.
+            # This is the lazy contract working: the image is available via the
+            # tool, but the model only calls it when it needs to.
             return response  # final turn; no describe_image to strip
+
+        logger.info(f"describe_image: round {round_n}, {len(describe_calls)} call(s)")
 
         # If every describe call this round repeats an identical, already-
         # answered question, the model is looping (typically because it also
