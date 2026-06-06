@@ -50,12 +50,16 @@ GRADE_SCHEMA = {
 }
 
 
-def describe_via_bridge(model: str, timeout: int) -> str:
+def describe_via_bridge(model: str, timeout: int, vision_model: str | None = None) -> str:
     """Ask the target model, through the bridge, to describe the image.
 
     The image is copied to a randomly named temp file first so nothing in the
     path (e.g. a content word in the filename) hints at the answer; the model
     must rely solely on the image bytes.
+
+    When vision_model is set, the main model runs through the describe_image
+    path: it is text-only (or treated as such), and the bridge routes the image
+    to the vision model on its behalf. This grades the side-channel end to end.
     """
     import shutil as _shutil
     import tempfile
@@ -69,10 +73,10 @@ def describe_via_bridge(model: str, timeout: int) -> str:
         f"sentences. Name the specific subject and any colors or notable "
         f"features. Describe only what is actually visible."
     )
-    cmd = [
-        BRIDGE,
-        "--model",
-        model,
+    cmd = [BRIDGE, "--model", model]
+    if vision_model:
+        cmd += ["--vision-model", vision_model]
+    cmd += [
         "--claude",
         "--print",
         prompt,
@@ -134,7 +138,14 @@ def grade(description: str, timeout: int) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="E2E perception grader for a Bedrock model via the bridge.")
-    ap.add_argument("--model", required=True, help="Bedrock model ID to test (must accept image input).")
+    ap.add_argument("--model", required=True, help="Bedrock model ID to test (the main model).")
+    ap.add_argument(
+        "--vision-model",
+        default=None,
+        help="Optional --vision-model ID. When set, the main model runs the "
+        "describe_image path and the image is inspected by this model, grading "
+        "the side channel end to end. Without it, --model must accept images.",
+    )
     ap.add_argument(
         "--threshold", type=float, default=0.6, help="Minimum acceptable score (default: 0.6). Exit nonzero below this."
     )
@@ -147,8 +158,9 @@ def main() -> int:
         print(f"missing fixture(s) under {FIXTURES}", file=sys.stderr)
         return 2
 
-    print(f"[1/2] describing {IMAGE.name} via bridge model {args.model} ...", file=sys.stderr)
-    description = describe_via_bridge(args.model, args.describe_timeout)
+    via = f"{args.model} (vision={args.vision_model})" if args.vision_model else args.model
+    print(f"[1/2] describing {IMAGE.name} via bridge model {via} ...", file=sys.stderr)
+    description = describe_via_bridge(args.model, args.describe_timeout, args.vision_model)
     print(f"\n--- model description ---\n{description}\n", file=sys.stderr)
 
     print("[2/2] grading against ground-truth annotation ...", file=sys.stderr)
@@ -158,7 +170,14 @@ def main() -> int:
     if args.json:
         print(
             json.dumps(
-                {"model": args.model, "description": description, "threshold": args.threshold, **result}, indent=2
+                {
+                    "model": args.model,
+                    "vision_model": args.vision_model,
+                    "description": description,
+                    "threshold": args.threshold,
+                    **result,
+                },
+                indent=2,
             )
         )
     else:

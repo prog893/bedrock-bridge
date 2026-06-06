@@ -165,16 +165,23 @@ def preflight(region: str | None, main_id: str, light_id: str | None, vision_id:
                 f"(modalities: {', '.join(modalities) or 'none'}). It cannot "
                 f"serve as a chat model. Pick a text-capable model."
             )
-        # The vision slot exists solely to inspect images on behalf of a
-        # text-only main model. If it can't take IMAGE input it is useless in
-        # that role, so this is a config error, not a soft capability flag.
-        if label == "vision" and modalities is not None and "IMAGE" not in modalities:
-            _fatal(
-                f"vision model {mid} does not accept IMAGE input "
-                f"(modalities: {', '.join(modalities) or 'none'}). The "
-                f"--vision-model slot is only useful with an image-capable "
-                f"model. Pick one, or drop the flag."
-            )
+        # The vision slot inspects images on behalf of a text-only main model.
+        # It needs IMAGE input to see the image and TEXT input to read the task
+        # prompt the bridge sends alongside it (see server._call_vision_model).
+        # Missing either makes it useless in that role: a config error, not a
+        # soft capability flag.
+        if label == "vision" and modalities is not None:
+            required = {"TEXT", "IMAGE"}
+            missing = required - set(modalities)
+            if missing:
+                _fatal(
+                    f"vision model {mid} is missing required input "
+                    f"modalities {', '.join(sorted(missing))} "
+                    f"(has: {', '.join(modalities) or 'none'}). The "
+                    f"--vision-model slot needs both TEXT and IMAGE: it reads a "
+                    f"task prompt and inspects the image. Pick a model with "
+                    f"both, or drop the flag."
+                )
         # Unknown modalities (lookup failed) default to vision-capable so we
         # don't wrongly reject image turns; a real rejection surfaces at call.
         vision = "IMAGE" in modalities if modalities is not None else True
