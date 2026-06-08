@@ -8,6 +8,7 @@ and the configured models enabled in the account.
 Model selection (override via env):
   BEDROCK_BRIDGE_TEST_TEXT_MODEL    text-only model       (default: minimax-m2.5)
   BEDROCK_BRIDGE_TEST_IMAGE_MODEL   accepts image input   (default: kimi-k2.5)
+  BEDROCK_BRIDGE_TEST_VISION_MODEL  --vision-model slot   (default: qwen3-vl-235b)
   AWS_REGION                        region                (default: ap-northeast-1)
 """
 
@@ -29,6 +30,8 @@ REGION = os.environ.get("AWS_REGION") or "ap-northeast-1"
 # minimax-m2.5 is text-only; kimi-k2.5 accepts IMAGE input. Override via env.
 TEXT_ONLY_MODEL = os.environ.get("BEDROCK_BRIDGE_TEST_TEXT_MODEL", "minimax.minimax-m2.5")
 TEXT_IMAGE_MODEL = os.environ.get("BEDROCK_BRIDGE_TEST_IMAGE_MODEL", "moonshotai.kimi-k2.5")
+# qwen3-vl accepts TEXT+IMAGE; used as the --vision-model side channel.
+VISION_MODEL = os.environ.get("BEDROCK_BRIDGE_TEST_VISION_MODEL", "qwen.qwen3-vl-235b-a22b")
 
 
 def _free_port() -> int:
@@ -95,6 +98,14 @@ class BridgeClient:
         body.setdefault("model", self.default_model)
         return _post_json(self.base_url + "/v1/messages", body, timeout=timeout)
 
+    def read_log(self) -> str:
+        """Current contents of the proxy's log file. Tests assert on the
+        bridge's own log lines to confirm which vision-adapt path ran (strip
+        vs. describe_image), since the response envelope alone can't distinguish
+        them."""
+        with open(self.log_path) as f:
+            return f.read()
+
 
 def _require_aws() -> None:
     """Fail (not skip) if AWS is unreachable.
@@ -115,9 +126,12 @@ def _require_aws() -> None:
         ) from e
 
 
-def _spawn_bridge(main_model: str, main_supports_vision: bool) -> Iterator[BridgeClient]:
-    """Start a proxy subprocess configured for one main model. Yields a
-    BridgeClient; tears the subprocess down on exit."""
+def _spawn_bridge(
+    main_model: str, main_supports_vision: bool, vision_model: str | None = None
+) -> Iterator[BridgeClient]:
+    """Start a proxy subprocess configured for one main model (and an optional
+    --vision-model side channel). Yields a BridgeClient; tears the subprocess
+    down on exit."""
     port = _free_port()
     log_path = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"bedrock-bridge-test-{port}.log")
     log_file = open(log_path, "w", buffering=1)
@@ -148,6 +162,7 @@ def _spawn_bridge(main_model: str, main_supports_vision: bool) -> Iterator[Bridg
             {
                 "main_model_id": main_model,
                 "light_model_id": None,
+                "vision_model_id": vision_model,
                 "main_supports_vision": main_supports_vision,
                 "light_supports_vision": True,
             },
@@ -175,3 +190,23 @@ def bridge_image() -> BridgeClient:
     """Proxy whose main model accepts image input (real vision path)."""
     _require_aws()
     yield from _spawn_bridge(TEXT_IMAGE_MODEL, main_supports_vision=True)
+
+
+@pytest.fixture(scope="session")
+def bridge_text_with_vision() -> BridgeClient:
+    """Text-only main model with a --vision-model side channel. Image turns get
+    a describe_image marker; the main model calls describe_image and the bridge
+    answers it from the vision model."""
+    _require_aws()
+    yield from _spawn_bridge(TEXT_ONLY_MODEL, main_supports_vision=False, vision_model=VISION_MODEL)
+
+
+@pytest.fixture(scope="session")
+def bridge_image_with_vision() -> BridgeClient:
+    """Image-capable main model with a --vision-model side channel. The CLI
+    preflight routes images through the vision model anyway when --vision-model
+    is set, so the main model is configured non-vision here (matching that
+    preflight decision) and must use describe_image rather than seeing images
+    directly."""
+    _require_aws()
+    yield from _spawn_bridge(TEXT_IMAGE_MODEL, main_supports_vision=False, vision_model=VISION_MODEL)

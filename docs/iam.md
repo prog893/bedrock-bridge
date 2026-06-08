@@ -8,7 +8,7 @@ The principal (IAM user, role, or SSO permission set) running `bedrock-bridge` n
 2. Read foundation-model and inference-profile metadata (preflight per-model verification)
 3. Invoke Bedrock Converse / ConverseStream against the configured models
 
-Below is a minimal templated policy. List your `<MAIN_MODEL_ID>` and `<LIGHT_MODEL_ID>` in the `Resource` array; if you don't configure a light model, drop that ARN pair.
+Below is a minimal templated policy. List your `<MAIN_MODEL_ID>` and `<LIGHT_MODEL_ID>` in the `Resource` array; if you don't configure a light model, drop that ARN pair. If you use `--vision-model`, add its ID the same way (`<VISION_MODEL_ID>`); it is invoked via Converse like any other slot and needs no extra actions.
 
 ```json
 {
@@ -42,7 +42,9 @@ Below is a minimal templated policy. List your `<MAIN_MODEL_ID>` and `<LIGHT_MOD
         "arn:aws:bedrock:*::foundation-model/<MAIN_MODEL_ID>",
         "arn:aws:bedrock:*:*:inference-profile/<MAIN_MODEL_ID>",
         "arn:aws:bedrock:*::foundation-model/<LIGHT_MODEL_ID>",
-        "arn:aws:bedrock:*:*:inference-profile/<LIGHT_MODEL_ID>"
+        "arn:aws:bedrock:*:*:inference-profile/<LIGHT_MODEL_ID>",
+        "arn:aws:bedrock:*::foundation-model/<VISION_MODEL_ID>",
+        "arn:aws:bedrock:*:*:inference-profile/<VISION_MODEL_ID>"
       ]
     }
   ]

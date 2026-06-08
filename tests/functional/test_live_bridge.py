@@ -76,9 +76,33 @@ def test_illegal_tool_name_is_sanitized(bridge: BridgeClient) -> None:
     assert "ValidationException" not in blob
 
 
-# An image sent to a text-only main model must not 500 with "doesn't support
-# the image content block": the bridge strips images to a text marker and the
-# turn succeeds.
+# Image sent to an image-capable main model, no vision side channel: the image
+# goes inline to the main model and the turn round-trips with no strip/describe
+# adaptation.
+def test_image_to_image_model_passes_through(bridge_image: BridgeClient) -> None:
+    status, body = bridge_image.messages(
+        {
+            "max_tokens": 64,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe what you can see, if anything."},
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _RED_PIXEL}},
+                    ],
+                }
+            ],
+        }
+    )
+    assert status == 200, body
+    assert body["type"] == "message"
+    assert "doesn't support the image" not in str(body)
+    assert "describe_image" not in str(body)
+
+
+# An image sent to a text-only main model with NO vision side channel must not
+# 500 with "doesn't support the image content block": the bridge strips images
+# to a text marker and the turn succeeds.
 def test_image_to_text_only_model_is_stripped(bridge: BridgeClient) -> None:
     status, body = bridge.messages(
         {
@@ -96,6 +120,66 @@ def test_image_to_text_only_model_is_stripped(bridge: BridgeClient) -> None:
     )
     assert status == 200, body
     assert "doesn't support the image" not in str(body)
+    assert "vision adapt: stripped" in bridge.read_log()
+
+
+# An image sent to a text-only main model WITH a --vision-model side channel:
+# the bridge stashes the image behind a describe_image marker, injects the tool,
+# and answers any describe_image call from the vision model. The turn must
+# round-trip, no describe_image block may leak to the client, and the log must
+# show the stash path (not the strip path).
+def test_image_to_text_only_model_with_vision(bridge_text_with_vision: BridgeClient) -> None:
+    status, body = bridge_text_with_vision.messages(
+        {
+            "max_tokens": 256,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What color is this image? Use describe_image to find out."},
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _RED_PIXEL}},
+                    ],
+                }
+            ],
+        }
+    )
+    assert status == 200, body
+    assert body["type"] == "message"
+    # describe_image is bridge-internal; it must never surface to the client.
+    for block in body.get("content", []):
+        if block.get("type") == "tool_use":
+            assert block.get("name") != "describe_image"
+    log = bridge_text_with_vision.read_log()
+    assert "vision adapt: stashed" in log
+
+
+# An image sent to an image-capable main model WITH --vision-model set: the CLI
+# preflight treats main as text-only and routes images through the vision model,
+# so the bridge takes the describe_image path even though the main model could
+# see images itself. Mirrors the bridge_image_with_vision fixture's non-vision
+# main configuration.
+def test_image_to_image_model_with_vision_uses_describe(bridge_image_with_vision: BridgeClient) -> None:
+    status, body = bridge_image_with_vision.messages(
+        {
+            "max_tokens": 256,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What color is this image? Use describe_image to find out."},
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _RED_PIXEL}},
+                    ],
+                }
+            ],
+        }
+    )
+    assert status == 200, body
+    assert body["type"] == "message"
+    for block in body.get("content", []):
+        if block.get("type") == "tool_use":
+            assert block.get("name") != "describe_image"
+    log = bridge_image_with_vision.read_log()
+    assert "vision adapt: stashed" in log
 
 
 # An image inside a tool_result, sent to an image-capable model, must round-trip

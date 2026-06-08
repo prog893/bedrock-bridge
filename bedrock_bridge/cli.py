@@ -34,6 +34,7 @@ LOGO = r"""
 
 ENV_MAIN = "BEDROCK_BRIDGE_MODEL"
 ENV_LIGHT = "BEDROCK_BRIDGE_MODEL_LIGHT"
+ENV_VISION = "BEDROCK_BRIDGE_MODEL_VISION"
 
 # Inference-profile ID prefixes; non-region-pinned cross-region invocation.
 _PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.", "apne1.", "apne2.", "apne3.")
@@ -96,7 +97,7 @@ def _model_input_modalities(bedrock_client: Any, model_id: str) -> list[str] | N
         return None
 
 
-def preflight(region: str | None, main_id: str, light_id: str | None) -> dict:
+def preflight(region: str | None, main_id: str, light_id: str | None, vision_id: str | None = None) -> dict:
     """Verify credentials, region, and per-model access before serving traffic.
 
     Fail-fast with a clear message; let AWS error strings surface verbatim.
@@ -127,7 +128,7 @@ def preflight(region: str | None, main_id: str, light_id: str | None) -> dict:
         _fatal(f"could not construct bedrock client: {e}")
 
     capabilities: dict = {}
-    for label, mid in (("main", main_id), ("light", light_id)):
+    for label, mid in (("main", main_id), ("light", light_id), ("vision", vision_id)):
         if not mid:
             continue
         try:
@@ -164,6 +165,23 @@ def preflight(region: str | None, main_id: str, light_id: str | None) -> dict:
                 f"(modalities: {', '.join(modalities) or 'none'}). It cannot "
                 f"serve as a chat model. Pick a text-capable model."
             )
+        # The vision slot inspects images on behalf of a text-only main model.
+        # It needs IMAGE input to see the image and TEXT input to read the task
+        # prompt the bridge sends alongside it (see server._call_vision_model).
+        # Missing either makes it useless in that role: a config error, not a
+        # soft capability flag.
+        if label == "vision" and modalities is not None:
+            required = {"TEXT", "IMAGE"}
+            missing = required - set(modalities)
+            if missing:
+                _fatal(
+                    f"vision model {mid} is missing required input "
+                    f"modalities {', '.join(sorted(missing))} "
+                    f"(has: {', '.join(modalities) or 'none'}). The "
+                    f"--vision-model slot needs both TEXT and IMAGE: it reads a "
+                    f"task prompt and inspects the image. Pick a model with "
+                    f"both, or drop the flag."
+                )
         # Unknown modalities (lookup failed) default to vision-capable so we
         # don't wrongly reject image turns; a real rejection surfaces at call.
         vision = "IMAGE" in modalities if modalities is not None else True
@@ -171,6 +189,19 @@ def preflight(region: str | None, main_id: str, light_id: str | None) -> dict:
         label_modalities = "text, image" if vision else "text"
         print(f"    ✓ {label}: {mid} ({label_modalities})")
 
+    # A configured --vision-model is an explicit choice to route images through
+    # the side model. If the main model can also see images, defining the
+    # vision slot overrides that: we mark main as non-vision so image turns are
+    # intercepted by describe_image rather than passed inline to main. Warn so
+    # the override is visible (it is otherwise silent and surprising).
+    if vision_id and capabilities.get("main_supports_vision"):
+        print(
+            "    ! main model is image-capable, but --vision-model is set; "
+            "routing images to the vision model and treating main as text-only."
+        )
+        capabilities["main_supports_vision"] = False
+
+    capabilities["vision_model_set"] = bool(vision_id)
     return capabilities
 
 
@@ -208,8 +239,12 @@ def cmd_launch(args: argparse.Namespace) -> None:
     light_raw = args.model_light or os.environ.get(ENV_LIGHT)
     if light_raw:
         _refuse_anthropic(light_raw, "light")
+    vision_raw = args.vision_model or os.environ.get(ENV_VISION)
+    if vision_raw:
+        _refuse_anthropic(vision_raw, "vision")
     main_id = normalize_model_id(main_raw)
     light_id = normalize_model_id(light_raw) if light_raw else None
+    vision_id = normalize_model_id(vision_raw) if vision_raw else None
 
     region = _resolve_region(args.region)
     port = find_free_port()
@@ -218,10 +253,12 @@ def cmd_launch(args: argparse.Namespace) -> None:
     print(f"  Main:   {main_id}")
     if light_id:
         print(f"  Light:  {light_id}")
+    if vision_id:
+        print(f"  Vision: {vision_id}")
     print(f"  Proxy:  http://127.0.0.1:{port}")
     print()
 
-    capabilities = preflight(region, main_id, light_id)
+    capabilities = preflight(region, main_id, light_id, vision_id)
     print()
 
     log_path = os.path.join(tempfile.gettempdir(), f"bedrock-bridge-{port}.log")
@@ -273,6 +310,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
             {
                 "main_model_id": main_id,
                 "light_model_id": light_id,
+                "vision_model_id": vision_id,
                 "main_supports_vision": capabilities.get("main_supports_vision", True),
                 "light_supports_vision": capabilities.get("light_supports_vision", True),
             }
@@ -382,6 +420,7 @@ def _build_launch_parser(prog: str) -> argparse.ArgumentParser:
             environment:
               {ENV_MAIN}        Main Bedrock model ID (used if --model is omitted).
               {ENV_LIGHT}  Optional light/background model ID (used if --model-light is omitted).
+              {ENV_VISION} Optional image-capable model ID (used if --vision-model is omitted).
               AWS_REGION, AWS_PROFILE, etc.       Standard boto3 credential / region chain.
 
             examples:
@@ -402,6 +441,16 @@ def _build_launch_parser(prog: str) -> argparse.ArgumentParser:
     )
     p.add_argument("--model", "-m", help=f"Main Bedrock model ID. Falls back to ${ENV_MAIN}.")
     p.add_argument("--model-light", help=f"Optional light-model ID. Falls back to ${ENV_LIGHT}.")
+    p.add_argument(
+        "--vision-model",
+        help=(
+            f"Optional image-capable Bedrock model ID. Falls back to ${ENV_VISION}. "
+            f"When set, image turns are inspected by this model via a describe_image "
+            f"tool instead of being dropped on a text-only main model. If the main "
+            f"model is itself image-capable, setting this flag routes images here "
+            f"anyway."
+        ),
+    )
     p.add_argument("--region", "-r", help="AWS region (overrides boto3 chain).")
     p.add_argument(
         "--claude",

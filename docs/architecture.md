@@ -69,11 +69,54 @@ The substring fallback covers Anthropic-API clients that emit native Anthropic m
 
 - **Tool name and use-ID shortening.** Bedrock Converse rejects tool names or `toolUseId` values longer than 64 characters. Claude Code emits MCP tool names like `mcp__aws-billing-cost-management__list-cost-allocation-tag-backfill-history` that exceed this. We shorten to `prefix[:55] + "_" + sha256[:8]` and keep a bidirectional in-memory map so the matching `toolResult` block references the same shortened ID, then restore the original on the way back.
 - **Image blocks.** Anthropic sends `{source.type: "base64", data: "<str>"}`; Bedrock wants raw `bytes`. We `base64.b64decode` and normalize `image/jpg` to `jpeg` (Bedrock rejects `jpg`).
-- **Image hoisting from `tool_result`.** Some Bedrock models reject images nested inside `toolResult.content`. We hoist any image blocks out of tool-result content into a sibling user-message position before sending. Vision-capable models still see the image; non-vision models reject it (with a clear error), which is the correct behavior.
+- **Image hoisting from `tool_result`.** Some Bedrock models reject images nested inside `toolResult.content`. We hoist any image blocks out of tool-result content into a sibling user-message position before sending. Vision-capable models still see the image; for text-only models the image is adapted before send (see "Vision adaptation" below).
 - **`stop_sequences` is dropped.** Every non-Anthropic Bedrock model rejects `stopSequences` with `ValidationException: This model doesn't support the stopSequences field`. The bridge does not serve Anthropic targets (preflight refuses them; see "Refusal" below), so the field is dropped unconditionally.
 - **Server-side Anthropic tools are dropped.** Anthropic's hosted tools (`web_search_*`, `computer_*`, `bash_*`, `text_editor_*`) execute on Anthropic's servers and have no Bedrock equivalent. We strip them from the `tools` list. If that leaves the list empty, `toolConfig` is omitted (Bedrock rejects an empty tool list).
 - **Streaming.** Bedrock `converse_stream` produces a different event shape than Anthropic SSE. `converse_stream_to_anthropic_events` translates each Converse stream chunk into the matching Anthropic events (`message_start`, `content_block_*`, `message_delta`, etc.) and the proxy emits them as SSE.
 - **Thinking / reasoning blocks.** Models like Kimi K2 Thinking and Anthropic's extended-thinking models emit reasoning content in `output.message.content[*].reasoningContent`. We translate those to Anthropic `thinking` blocks in the response.
+
+## Vision adaptation
+
+A text-only main model cannot accept image input. `server.messages` detects this (the routed model's IMAGE modality flag, set at preflight) and adapts the body before send. There are two paths:
+
+- **No `--vision-model` configured.** `_strip_images_from_body` replaces each image block with a text marker telling the model to inform the user that images need a vision model and how to enable one. The turn is forwarded so the session continues.
+- **`--vision-model` configured.** `_stash_images_for_describe` replaces each image with a `describe_image` marker carrying a content-derived handle (`img-` + sha256 prefix, not a sequential index), and stashes the real Bedrock image block in a per-request `handle -> block` map. A `describe_image` toolSpec is injected into the main model's `toolConfig`; this tool is never exposed to Claude Code. `_run_describe_loop` then drives the main model non-streaming: when it calls `describe_image`, the bridge runs the vision model (`_call_vision_model`) on the stashed bytes with the model's `prompt`, returns the description as a `toolResult` framed as a second-hand text rendering (`_describe_result_text`), and re-invokes. Any non-`describe_image` tool call in the same assistant turn is discarded; the model re-decides with the descriptions now in context. The loop ends on the first turn with no `describe_image` call (capped at `_MAX_DESCRIBE_ROUNDS`).
+
+Because the describe loop must inspect each assistant turn before deciding to continue, it runs non-streaming even when the client asked to stream. `_buffered_message_to_sse` replays the final buffered message as the Anthropic SSE event sequence so a streaming client still gets a stream. The common no-image path streams directly from Bedrock.
+
+If the main model is itself image-capable but `--vision-model` is set, preflight treats main as text-only (with a warning) so images route to the vision model.
+
+### Who calls `describe_image` (and why no tool card shows)
+
+The describe path is non-obvious because three actors are involved, and `describe_image` is a contract between only two of them:
+
+1. **Claude Code** (the client). Speaks the Anthropic Messages API; sends its own `tools` list. It is the outer agent and never learns `describe_image` exists.
+2. **The main model** (e.g. minimax). The model the bridge routes Claude Code's request to, and the actor who emits `describe_image` tool calls.
+3. **The vision model** (e.g. qwen-vl). A side channel the bridge invokes directly; never in the conversation.
+
+The mechanic is append-then-intercept-and-hide:
+
+- **Append (inbound).** The bridge takes Claude Code's `tools`, translates them to a Bedrock `toolConfig`, and appends the `describe_image` toolSpec to that list (the union; Claude Code's real tools are untouched). The image block is swapped for a text marker naming the handle. Claude Code's request object is never told about either change.
+- **Intercept (outbound).** `_run_describe_loop` scans the main model's response for tool calls named exactly `describe_image`. Those it fulfills itself (run the vision model, feed the `toolResult` back, loop). Any *real* tool call (one of Claude Code's tools) is left to flow back to Claude Code normally.
+- **Hide.** The whole loop resolves inside the single request handler, so from Claude Code's side it is one request in, one final assistant message out. No `describe_image` block ever reaches Claude Code (and `_strip_describe_blocks` removes any leftover on the fallback paths).
+
+This is why no tool-use card appears in the Claude Code transcript: a card requires the client to have registered the tool and to execute it across a follow-up request, but `describe_image` is registered with the main model only and fulfilled server-side. The user sees the main model's final prose, composed from the vision description; the inspection is folded into that prose rather than surfaced as a discrete step.
+
+It also means the prompt sent to the vision model is authored by the *main model*. The main model reads the marker, decides whether it needs to look, and writes a prompt targeting the user's actual question (so a follow-up like "what are the hex colors" produces a different vision prompt than "explain this image"). The bridge only pairs that prompt with the real bytes and a fixed inspector system prompt. The bridge log is the sole place this exchange is visible: `_run_describe_loop` logs one line per round with the number of `describe_image` calls.
+
+```text
+Claude Code ──Messages: "explain this image" (+ its own tools)──▶ bridge
+                                                                    │
+                                                                    │  one handler call (_run_describe_loop):
+                                                                    │   append describe_image to toolConfig; image -> marker
+                                                                    │   ├─ Converse ▶ main model   (real tools + describe_image + marker)
+                                                                    │   ◀─ main: toolUse describe_image(handle, "describe what you see")
+                                                                    │   ├─ Converse ▶ vision model (real bytes + that prompt)
+                                                                    │   ◀─ vision: "OpenAI region screenshot..."
+                                                                    │   ├─ Converse ▶ main model   (toolResult = that text)
+                                                                    │   ◀─ main: final answer, no more describe_image calls
+Claude Code ◀──Messages response: final text (describe_image stripped)── bridge
+```
 
 ## Startup output
 
