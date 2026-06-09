@@ -41,7 +41,7 @@ Claude Code's auto-mode safety classifier works through the bridge. With a light
 
 Pass any Bedrock foundation ID (`moonshotai.kimi-k2.5`) or inference-profile ID (`us.meta.llama4-...`) directly. CLI flags override env vars.
 
-Extra `claude` flags pass through after `--`: `bedrock-bridge -m moonshotai.kimi-k2.5 --claude -- --verbose`.
+Extra `claude` flags pass through directly: `bedrock-bridge -m moonshotai.kimi-k2.5 --claude --verbose`.
 
 ### Resuming sessions
 
@@ -49,13 +49,13 @@ Claude Code's `--continue` and `--resume` work normally through the bridge:
 
 ```bash
 # Continue the most recent session in the current directory
-bedrock-bridge -m moonshotai.kimi-k2.5 --claude -- --continue
+bedrock-bridge -m moonshotai.kimi-k2.5 --claude --continue
 
 # Pick a session interactively
-bedrock-bridge -m moonshotai.kimi-k2.5 --claude -- --resume
+bedrock-bridge -m moonshotai.kimi-k2.5 --claude --resume
 
 # Resume a specific session by id
-bedrock-bridge -m moonshotai.kimi-k2.5 --claude -- --resume <session-id>
+bedrock-bridge -m moonshotai.kimi-k2.5 --claude --resume <session-id>
 ```
 
 ### Aliases
@@ -64,11 +64,11 @@ Alias the bridge to a short command for frequent use. Add to `~/.zshrc` or `~/.b
 
 ```bash
 # Dedicated command per model; leaves `claude` untouched
-alias claude-kimi='bedrock-bridge -m moonshotai.kimi-k2.5 --model-light minimax.minimax-m2.5 --claude --'
-alias claude-glm='bedrock-bridge -m zai.glm-5 --model-light zai.glm-4.7-flash --claude --'  # text-only; image turns intercepted
+alias claude-kimi='bedrock-bridge -m moonshotai.kimi-k2.5 --model-light minimax.minimax-m2.5 --claude'
+alias claude-glm='bedrock-bridge -m zai.glm-5 --model-light zai.glm-4.7-flash --claude'  # text-only; image turns intercepted
 
 # Or override `claude` so every invocation routes through the bridge
-alias claude='bedrock-bridge -m moonshotai.kimi-k2.5 --model-light minimax.minimax-m2.5 --claude --'
+alias claude='bedrock-bridge -m moonshotai.kimi-k2.5 --model-light minimax.minimax-m2.5 --claude'
 ```
 
 All forms accept the full `claude` flag set, including `--continue` and `--resume`.
