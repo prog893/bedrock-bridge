@@ -45,9 +45,15 @@ logger = logging.getLogger("bedrock-bridge")
 logger.setLevel(_level)
 
 
-def _trace(msg: str) -> None:
-    """Log at TRACE (debug tier only). Carries request/response content."""
-    logger.log(TRACE, msg)
+def _trace(msg: str | Callable[[], str]) -> None:
+    """Log at TRACE (debug tier only). Carries request/response content.
+
+    Accepts a zero-arg callable so expensive payload serialization
+    (json.dumps / _scrub_bytes_only) is skipped unless TRACE is enabled.
+    """
+    if not logger.isEnabledFor(TRACE):
+        return
+    logger.log(TRACE, msg() if callable(msg) else msg)
 
 
 _client = None
@@ -440,10 +446,12 @@ def _run_describe_loop(client: Any, model_id: str, kwargs: dict, metadata: dict,
             return response  # final turn; no describe_image to strip
 
         logger.debug(f"describe_image: round {round_n}, {len(describe_calls)} call(s)")
-        _prompts = [((tu.get("input") or {}).get("prompt") or "(no prompt)") for tu in describe_calls]
         _trace(
-            f"describe_image loop: round {round_n}, main model requested "
-            f"{len(describe_calls)} describe_image call(s): {_prompts}"
+            lambda: (
+                f"describe_image loop: round {round_n}, main model requested "
+                f"{len(describe_calls)} describe_image call(s): "
+                f"{[((tu.get('input') or {}).get('prompt') or '(no prompt)') for tu in describe_calls]}"
+            )
         )
 
         # If every describe call this round repeats an identical, already-
@@ -650,7 +658,7 @@ async def messages(request: Request) -> Response:
 
     raw_tools = body.get("tools", [])
     logger.info(f"-> model_in={model_alias} -> routed={model_id} stream={stream} tools={len(raw_tools)}")
-    _trace(f"request body: {json.dumps(_scrub_bytes_only(body))}")
+    _trace(lambda: f"request body: {json.dumps(_scrub_bytes_only(body))}")
     # History-recall fixup: when Claude Code recalls a prior turn from
     # history, it resends the `[Image #N]` chip text but does not preserve
     # the image bytes. Native Claude reads the bare chip and refuses
@@ -686,7 +694,7 @@ async def messages(request: Request) -> Response:
 
     converse_kwargs, metadata = anthropic_to_converse(body)
     metadata["model"] = model_alias
-    _trace(f"converse_kwargs: {json.dumps(_scrub_bytes_only(converse_kwargs), default=str)}")
+    _trace(lambda: f"converse_kwargs: {json.dumps(_scrub_bytes_only(converse_kwargs), default=str)}")
     client = get_client()
 
     # When describe_image is in play, inject its toolSpec into the main model's
@@ -718,7 +726,7 @@ async def messages(request: Request) -> Response:
             else:
                 response = client.converse(modelId=model_id, **converse_kwargs)
             result = converse_to_anthropic(response, metadata)
-            _trace(f"response (json): {json.dumps(result)}")
+            _trace(lambda: f"response (json): {json.dumps(result)}")
             return JSONResponse(result)
     except Exception as e:
         err_str = str(e)
@@ -761,7 +769,7 @@ async def _stream_response(
     try:
         if describe_images:
             response = _run_describe_loop(client, model_id, kwargs, metadata, describe_images)
-            _trace(f"buffered stream response: {json.dumps(_scrub_bytes_only(response), default=str)}")
+            _trace(lambda: f"buffered stream response: {json.dumps(_scrub_bytes_only(response), default=str)}")
             for chunk in _buffered_message_to_sse(response, metadata):
                 yield chunk
             return

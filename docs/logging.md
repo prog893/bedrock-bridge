@@ -27,10 +27,12 @@ Each tier is a superset of the one above it.
 ## The debug tier and PII
 
 `debug` logs prompt text verbatim. That includes anything in the conversation:
-source code, file contents, names, secrets a tool happened to surface. Image
-bytes are replaced with a `<redacted: N bytes>` marker (the byte count is kept
-because request-body-size limits are a common thing to debug), but text is not
-truncated or masked.
+source code, file contents, names, secrets a tool happened to surface. Images
+are replaced with a `<redacted: N bytes>` or `<redacted: N base64 chars>` marker
+(incoming Anthropic requests carry base64-encoded images, outgoing Converse
+kwargs carry raw bytes, so both forms can appear; the count is kept because
+request-body-size limits are a common thing to debug), but text is not truncated
+or masked.
 
 Because of that, `debug` is gated:
 

@@ -83,6 +83,7 @@ def _emit_all_levels() -> None:
 
 
 def _captured_levels(caplog: pytest.LogCaptureFixture, level: int) -> set[int]:
+    original_level = server.logger.level
     server.logger.setLevel(level)
     try:
         caplog.handler.setLevel(logging.NOTSET)
@@ -90,7 +91,7 @@ def _captured_levels(caplog: pytest.LogCaptureFixture, level: int) -> set[int]:
             _emit_all_levels()
         return {r.levelno for r in caplog.records if r.name == "bedrock-bridge"}
     finally:
-        server.logger.setLevel(logging.INFO)
+        server.logger.setLevel(original_level)
 
 
 # At default tier (INFO): access line only; verbose DEBUG and content TRACE gated.
@@ -110,6 +111,22 @@ def test_verbose_tier_shows_debug_hides_trace(caplog: pytest.LogCaptureFixture) 
 def test_debug_tier_shows_trace(caplog: pytest.LogCaptureFixture) -> None:
     levels = _captured_levels(caplog, server.TRACE)
     assert server.TRACE in levels
+
+
+# _trace accepts a callable and must NOT invoke it when TRACE is disabled, so
+# expensive payload serialization is skipped at default/verbose tiers.
+def test_trace_callable_not_evaluated_when_disabled() -> None:
+    original_level = server.logger.level
+    calls = []
+    server.logger.setLevel(logging.INFO)
+    try:
+        server._trace(lambda: calls.append(1) or "msg")
+        assert calls == []  # not evaluated
+        server.logger.setLevel(server.TRACE)
+        server._trace(lambda: calls.append(1) or "msg")
+        assert calls == [1]  # evaluated exactly once
+    finally:
+        server.logger.setLevel(original_level)
 
 
 # --claude is a hard argv boundary.
