@@ -223,10 +223,11 @@ def _confirm_debug_logging(log_path: str) -> None:
             f"written to {log_path}); cannot run on a non-TTY. Use --log-level "
             "verbose instead."
         )
-    ans = input(
-        f"debug logging writes prompt input/output to {log_path} "
-        "(plaintext, may contain PII). Proceed? [y/N] "
-    ).strip().lower()
+    ans = (
+        input(f"debug logging writes prompt input/output to {log_path} (plaintext, may contain PII). Proceed? [y/N] ")
+        .strip()
+        .lower()
+    )
     if ans not in ("y", "yes"):
         _fatal("aborted: debug logging not confirmed.")
 

@@ -917,8 +917,10 @@ def _scrub_bytes_only(obj: Any) -> Any:
     """
     if isinstance(obj, dict):
         if obj.get("type") == "base64" and isinstance(obj.get("data"), str):
-            return {**{k: _scrub_bytes_only(v) for k, v in obj.items() if k != "data"},
-                    "data": f"<redacted: {len(obj['data'])} base64 chars>"}
+            return {
+                **{k: _scrub_bytes_only(v) for k, v in obj.items() if k != "data"},
+                "data": f"<redacted: {len(obj['data'])} base64 chars>",
+            }
         return {k: _scrub_bytes_only(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_scrub_bytes_only(v) for v in obj]
