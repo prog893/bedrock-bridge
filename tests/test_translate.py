@@ -242,3 +242,14 @@ def test_stream_strips_single_leading_space_once() -> None:
     d2 = next(e[1] for e in out2 if e[0] == "content_block_delta")
     assert d1["delta"]["text"] == "hi"  # one leading space stripped
     assert d2["delta"]["text"] == "  there"  # later deltas untouched
+
+
+# The trailing Converse metadata event carries inputTokens and outputTokens.
+# We forward both on the final message_delta so the client can report the real
+# per-response input count instead of a hardcoded 0.
+def test_stream_metadata_forwards_input_tokens() -> None:
+    event = {"metadata": {"usage": {"inputTokens": 1500, "outputTokens": 800}}}
+    out = list(converse_stream_to_anthropic_events(event, {"model": "m"}, {}))
+    usage = next(e[1]["usage"] for e in out if e[0] == "message_delta")
+    assert usage["input_tokens"] == 1500
+    assert usage["output_tokens"] == 800
