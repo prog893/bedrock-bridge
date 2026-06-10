@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
@@ -23,9 +24,30 @@ from .translate import (
     converse_to_anthropic,
 )
 
+# Three log tiers, selected by BEDROCK_BRIDGE_LOG_LEVEL (set by the CLI):
+#   default -> INFO   one access line per request, plus warnings/errors.
+#   verbose -> DEBUG  adds internal adaptation detail (routing, vision-adapt,
+#                     history-recall fixups, describe_image round counts).
+#   debug   -> TRACE  adds request/response *content* (prompt text, full body
+#                     and Converse kwargs). The CLI gates this behind an
+#                     interactive consent prompt because it logs PII.
+TRACE = 5
+logging.addLevelName(TRACE, "TRACE")
+_TIER_TO_LEVEL = {"default": logging.INFO, "verbose": logging.DEBUG, "debug": TRACE}
+_tier = os.environ.get("BEDROCK_BRIDGE_LOG_LEVEL", "default").strip().lower()
+_level = _TIER_TO_LEVEL.get(_tier, logging.INFO)  # unknown value -> quietest
+# Root stays at INFO so third-party loggers (botocore especially, which dumps
+# full signed requests including image bytes and auth material at DEBUG) are not
+# dragged down with our tier. The handler basicConfig installs is NOTSET, so it
+# still emits our logger's TRACE records; only our own logger's level varies.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("bedrock-bridge")
-logger.setLevel(logging.INFO)
+logger.setLevel(_level)
+
+
+def _trace(msg: str) -> None:
+    """Log at TRACE (debug tier only). Carries request/response content."""
+    logger.log(TRACE, msg)
 
 
 _client = None
@@ -414,9 +436,15 @@ def _run_describe_loop(client: Any, model_id: str, kwargs: dict, metadata: dict,
             # Main model produced its turn without asking to inspect any image.
             # This is the lazy contract working: the image is available via the
             # tool, but the model only calls it when it needs to.
+            _trace(f"describe_image loop: round {round_n} produced no describe_image call; returning main turn")
             return response  # final turn; no describe_image to strip
 
-        logger.info(f"describe_image: round {round_n}, {len(describe_calls)} call(s)")
+        logger.debug(f"describe_image: round {round_n}, {len(describe_calls)} call(s)")
+        _prompts = [((tu.get("input") or {}).get("prompt") or "(no prompt)") for tu in describe_calls]
+        _trace(
+            f"describe_image loop: round {round_n}, main model requested "
+            f"{len(describe_calls)} describe_image call(s): {_prompts}"
+        )
 
         # If every describe call this round repeats an identical, already-
         # answered question, the model is looping (typically because it also
@@ -427,7 +455,7 @@ def _run_describe_loop(client: Any, model_id: str, kwargs: dict, metadata: dict,
             return (a.get("image_handle", ""), a.get("prompt"))
 
         if all(_key(tu) in answered for tu in describe_calls):
-            logger.info("describe_image loop: round repeated only answered questions; returning")
+            logger.debug("describe_image loop: round repeated only answered questions; returning")
             return _strip_describe_blocks(response)
 
         # Append the describe_image tool_uses as the assistant turn, then a user
@@ -460,6 +488,7 @@ def _run_describe_loop(client: Any, model_id: str, kwargs: dict, metadata: dict,
                     is_error = True
                 else:
                     try:
+                        _trace(f"describe_image: invoking vision model {_vision_model} for {handle}")
                         answer = _call_vision_model(client, img, prompt)
                         text = _describe_result_text(prompt, handle, answer)
                         is_error = False
@@ -621,6 +650,7 @@ async def messages(request: Request) -> Response:
 
     raw_tools = body.get("tools", [])
     logger.info(f"-> model_in={model_alias} -> routed={model_id} stream={stream} tools={len(raw_tools)}")
+    _trace(f"request body: {json.dumps(_scrub_bytes_only(body))}")
     # History-recall fixup: when Claude Code recalls a prior turn from
     # history, it resends the `[Image #N]` chip text but does not preserve
     # the image bytes. Native Claude reads the bare chip and refuses
@@ -629,7 +659,7 @@ async def messages(request: Request) -> Response:
     # for messages that still have a real image attached (live paste).
     n_lost = _replace_lost_image_chips(body)
     if n_lost:
-        logger.info(f"history-recall fixup: rewrote {n_lost} lost-image chip(s) to explicit instruction")
+        logger.debug(f"history-recall fixup: rewrote {n_lost} lost-image chip(s) to explicit instruction")
 
     # Vision adaptation: the routed model lacks IMAGE input modality but the
     # body carries images. Two paths, depending on whether a vision side model
@@ -644,7 +674,7 @@ async def messages(request: Request) -> Response:
             # The main model can call describe_image to have the side model
             # inspect them; the bridge answers that tool itself (see the loop).
             describe_images = _stash_images_for_describe(body)
-            logger.info(
+            logger.debug(
                 f"vision adapt: stashed {len(describe_images)} image(s) for "
                 f"describe_image via vision model {_vision_model}"
             )
@@ -652,10 +682,11 @@ async def messages(request: Request) -> Response:
             # No side model: replace images with a marker telling the user how
             # to enable image support (restart with --vision-model).
             n = _strip_images_from_body(body)
-            logger.info(f"vision adapt: stripped {n} image block(s); no vision model set")
+            logger.debug(f"vision adapt: stripped {n} image block(s); no vision model set")
 
     converse_kwargs, metadata = anthropic_to_converse(body)
     metadata["model"] = model_alias
+    _trace(f"converse_kwargs: {json.dumps(_scrub_bytes_only(converse_kwargs), default=str)}")
     client = get_client()
 
     # When describe_image is in play, inject its toolSpec into the main model's
@@ -687,6 +718,7 @@ async def messages(request: Request) -> Response:
             else:
                 response = client.converse(modelId=model_id, **converse_kwargs)
             result = converse_to_anthropic(response, metadata)
+            _trace(f"response (json): {json.dumps(result)}")
             return JSONResponse(result)
     except Exception as e:
         err_str = str(e)
@@ -729,10 +761,12 @@ async def _stream_response(
     try:
         if describe_images:
             response = _run_describe_loop(client, model_id, kwargs, metadata, describe_images)
+            _trace(f"buffered stream response: {json.dumps(_scrub_bytes_only(response), default=str)}")
             for chunk in _buffered_message_to_sse(response, metadata):
                 yield chunk
             return
 
+        _trace(f"stream start: model={model_id}")
         response = client.converse_stream(modelId=model_id, **kwargs)
         stream = response.get("stream", [])
         # Per-stream state for the translator (synthesizes content_block_start
@@ -870,10 +904,32 @@ def _buffered_message_to_sse(response: dict, metadata: dict) -> Iterator[str]:
     yield "event: message_stop\ndata: {}\n\n"
 
 
+def _scrub_bytes_only(obj: Any) -> Any:
+    """Redact image payloads but keep all text verbatim.
+
+    Used for debug-tier content logging, where prompt text is logged in full on
+    purpose. Contrast with _dump_failure's scrub(), which also truncates long
+    strings; that would defeat the point of a debug dump.
+
+    Two image shapes are redacted: raw bytes (Bedrock Converse, post-translation)
+    and base64 strings in an Anthropic image source (`{"type": "base64",
+    "data": "<base64>"}`, the incoming request shape before translation).
+    """
+    if isinstance(obj, dict):
+        if obj.get("type") == "base64" and isinstance(obj.get("data"), str):
+            return {**{k: _scrub_bytes_only(v) for k, v in obj.items() if k != "data"},
+                    "data": f"<redacted: {len(obj['data'])} base64 chars>"}
+        return {k: _scrub_bytes_only(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub_bytes_only(v) for v in obj]
+    if isinstance(obj, (bytes, bytearray)):
+        return f"<redacted: {len(obj)} bytes>"
+    return obj
+
+
 def _dump_failure(body: dict, kwargs: dict, err: str) -> None:
     """Persist a scrubbed copy of a failing request for offline debugging."""
     import datetime
-    import os
     import tempfile
     import uuid
 

@@ -135,7 +135,9 @@ def _spawn_bridge(
     port = _free_port()
     log_path = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"bedrock-bridge-test-{port}.log")
     log_file = open(log_path, "w", buffering=1)
-    env = {**os.environ, "AWS_REGION": REGION}
+    # verbose tier emits the internal vision-adapt lines these tests assert on
+    # (stash vs. strip path); at default they are gated.
+    env = {**os.environ, "AWS_REGION": REGION, "BEDROCK_BRIDGE_LOG_LEVEL": "verbose"}
     proxy = subprocess.Popen(
         [
             sys.executable,
