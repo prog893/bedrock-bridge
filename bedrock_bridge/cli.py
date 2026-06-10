@@ -210,6 +210,28 @@ def _fatal(msg: str) -> None:
     sys.exit(1)
 
 
+def _confirm_debug_logging(log_path: str) -> None:
+    """Gate debug-tier logging behind interactive consent.
+
+    debug logs prompt content (PII) to log_path. There is deliberately no
+    bypass flag, so a non-TTY (CI, --print) hard-fails rather than logging
+    content unprompted.
+    """
+    if not sys.stdin.isatty():
+        _fatal(
+            "debug logging needs interactive confirmation (prompt content is "
+            f"written to {log_path}); cannot run on a non-TTY. Use --log-level "
+            "verbose instead."
+        )
+    ans = (
+        input(f"debug logging writes prompt input/output to {log_path} (plaintext, may contain PII). Proceed? [y/N] ")
+        .strip()
+        .lower()
+    )
+    if ans not in ("y", "yes"):
+        _fatal("aborted: debug logging not confirmed.")
+
+
 def _refuse_anthropic(model_id: str, slot: str) -> None:
     """bedrock-bridge exists to run non-Claude models. For Claude on Bedrock,
     Claude Code already speaks Bedrock natively; using the bridge adds a hop
@@ -248,6 +270,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
 
     region = _resolve_region(args.region)
     port = find_free_port()
+    tier = (args.log_level or os.environ.get("BEDROCK_BRIDGE_LOG_LEVEL", "default")).strip().lower()
 
     print(LOGO)
     print(f"  Main:   {main_id}")
@@ -262,11 +285,18 @@ def cmd_launch(args: argparse.Namespace) -> None:
     print()
 
     log_path = os.path.join(tempfile.gettempdir(), f"bedrock-bridge-{port}.log")
+
+    if tier == "debug":
+        _confirm_debug_logging(log_path)
+
     log_file = open(log_path, "w", buffering=1)
 
     proxy_env = os.environ.copy()
     if region:
         proxy_env["AWS_REGION"] = region
+    proxy_env["BEDROCK_BRIDGE_LOG_LEVEL"] = tier
+    # Scale uvicorn's own server/access logs with the tier.
+    uvicorn_level = {"default": "warning", "verbose": "info", "debug": "debug"}.get(tier, "warning")
     proxy = subprocess.Popen(
         [
             sys.executable,
@@ -278,7 +308,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
             "--port",
             str(port),
             "--log-level",
-            "warning",
+            uvicorn_level,
         ],
         env=proxy_env,
         stdout=log_file,
@@ -435,8 +465,9 @@ def _build_launch_parser(prog: str) -> argparse.ArgumentParser:
               # Launch Claude Code through the proxy.
               bedrock-bridge --model moonshotai.kimi-k2.5 --claude
 
-              # Pass extra flags through to claude (only valid with --claude).
-              bedrock-bridge --model moonshotai.kimi-k2.5 --claude -- --verbose
+              # --claude is a hard boundary: everything after it goes to the
+              # claude command verbatim. Bridge flags go before it.
+              bedrock-bridge --model moonshotai.kimi-k2.5 --log-level verbose --claude --verbose
         """),
     )
     p.add_argument("--model", "-m", help=f"Main Bedrock model ID. Falls back to ${ENV_MAIN}.")
@@ -453,12 +484,38 @@ def _build_launch_parser(prog: str) -> argparse.ArgumentParser:
     )
     p.add_argument("--region", "-r", help="AWS region (overrides boto3 chain).")
     p.add_argument(
+        "--log-level",
+        choices=["default", "verbose", "debug"],
+        default=None,
+        help=(
+            "Bridge log verbosity. default: one access line per request plus "
+            "warnings/errors. verbose: adds internal adaptation detail. debug: "
+            "adds request/response content (prompt text); logs PII to the log "
+            "file and requires interactive confirmation. Falls back to "
+            "$BEDROCK_BRIDGE_LOG_LEVEL, then default."
+        ),
+    )
+    p.add_argument(
         "--claude",
         action="store_true",
         help="Spawn the `claude` CLI wired to this proxy. Without this flag, the proxy just runs.",
     )
     p.add_argument("--print", help="With --claude: forward to `claude --print`.")
     return p
+
+
+def _split_at_claude(argv: list[str]) -> tuple[list[str], bool, list[str]]:
+    """Split argv at the first --claude token.
+
+    --claude is a hard boundary: everything after it belongs to the spawned
+    `claude` command, verbatim, even when a token matches a bridge flag (e.g.
+    --verbose, --log-level, --model). The bridge parses only tokens to its
+    left. Returns (bridge_argv, claude_flag, passthrough).
+    """
+    if "--claude" in argv:
+        idx = argv.index("--claude")
+        return argv[:idx], True, argv[idx + 1 :]
+    return argv, False, []
 
 
 def main() -> None:
@@ -468,11 +525,11 @@ def main() -> None:
         print(f"bedrock-bridge {__version__}")
         return
 
-    args, passthrough = _build_launch_parser("bedrock-bridge").parse_known_args(argv)
+    bridge_argv, claude, passthrough = _split_at_claude(argv)
+    args = _build_launch_parser("bedrock-bridge").parse_args(bridge_argv)
+    args.claude = claude
     args.passthrough = passthrough
 
-    if passthrough and not args.claude:
-        _fatal("extra args are only forwarded with --claude. Drop them or add --claude.")
     if args.print and not args.claude:
         _fatal("--print is only valid with --claude.")
 

@@ -102,7 +102,7 @@ The mechanic is append-then-intercept-and-hide:
 
 This is why no tool-use card appears in the Claude Code transcript: a card requires the client to have registered the tool and to execute it across a follow-up request, but `describe_image` is registered with the main model only and fulfilled server-side. The user sees the main model's final prose, composed from the vision description; the inspection is folded into that prose rather than surfaced as a discrete step.
 
-It also means the prompt sent to the vision model is authored by the *main model*. The main model reads the marker, decides whether it needs to look, and writes a prompt targeting the user's actual question (so a follow-up like "what are the hex colors" produces a different vision prompt than "explain this image"). The bridge only pairs that prompt with the real bytes and a fixed inspector system prompt. The bridge log is the sole place this exchange is visible: `_run_describe_loop` logs one line per round with the number of `describe_image` calls.
+It also means the prompt sent to the vision model is authored by the *main model*. The main model reads the marker, decides whether it needs to look, and writes a prompt targeting the user's actual question (so a follow-up like "what are the hex colors" produces a different vision prompt than "explain this image"). The bridge only pairs that prompt with the real bytes and a fixed inspector system prompt. The bridge log is the sole place this exchange is visible: at `verbose` `_run_describe_loop` logs one line per round with the number of `describe_image` calls; at `debug` it also logs the prompt the main model authored for each call (see [Logging](#logging)).
 
 ```text
 Claude Code ──Messages: "explain this image" (+ its own tools)──▶ bridge
@@ -176,6 +176,20 @@ The boto3 client is configured with `user_agent="bedrock-bridge/<version>"` and 
 ## Per-instance proxy
 
 Each invocation picks a random free port via `find_free_port()` and spawns its own uvicorn subprocess. Uvicorn stdout/stderr is redirected to `/tmp/bedrock-bridge-<port>.log` so harmless SSE disconnect warnings don't clobber Claude Code's TUI. Two parallel `bedrock-bridge` invocations work without any coordination.
+
+## Logging
+
+The server logger has three tiers, selected by `BEDROCK_BRIDGE_LOG_LEVEL` (set by the CLI from `--log-level`). The tier maps to a stdlib level on a single logger; level filtering does the gating, so each call site just picks its level:
+
+| Tier | Level | Adds |
+|------|-------|------|
+| `default` | `INFO` | One access line per request (`-> model_in=... routed=...`), plus warnings and errors. |
+| `verbose` | `DEBUG` | Internal adaptation detail: vision-adapt counts, history-recall fixups, `describe_image` round counts and loop detection. |
+| `debug` | `TRACE` (custom, 5) | Request and response content: the full request body, outgoing Converse kwargs, the JSON response, and the per-call `describe_image` prompts. Image bytes are replaced with `<redacted: N bytes>`; all text is verbatim. |
+
+Only the `bedrock-bridge` logger's level tracks the tier; the root logger stays at `INFO`. That matters at `debug`: lowering the root would enable third-party DEBUG logs, and botocore at DEBUG dumps the full signed request, including image bytes and auth material. Keeping the root fixed confines `debug` to the bridge's own redacted content lines.
+
+The CLI scales uvicorn's own `--log-level` to match (`warning` / `info` / `debug`). Because `debug` writes prompt content (potential PII) to the log file, the CLI requires interactive confirmation and refuses to run on a non-TTY; there is no bypass flag. See [logging.md](./logging.md).
 
 ## What's intentionally not here
 

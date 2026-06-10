@@ -32,6 +32,7 @@ bedrock-bridge -m deepseek.v3.2 --vision-model qwen.qwen3-vl-235b-a22b --claude
 | Main (required) | `BEDROCK_BRIDGE_MODEL` | `--model` / `-m` |
 | Light (optional) | `BEDROCK_BRIDGE_MODEL_LIGHT` | `--model-light` |
 | Vision (optional) | `BEDROCK_BRIDGE_MODEL_VISION` | `--vision-model` |
+| Log verbosity | `BEDROCK_BRIDGE_LOG_LEVEL` | `--log-level` |
 
 The light slot is for background tasks Claude Code dispatches to a smaller model. If no light model is configured, all requests route to the main model.
 
@@ -41,7 +42,19 @@ Claude Code's auto-mode safety classifier works through the bridge. With a light
 
 Pass any Bedrock foundation ID (`moonshotai.kimi-k2.5`) or inference-profile ID (`us.meta.llama4-...`) directly. CLI flags override env vars.
 
-Extra `claude` flags pass through directly: `bedrock-bridge -m moonshotai.kimi-k2.5 --claude --verbose`.
+`--claude` is a hard boundary: every token after it is forwarded to the `claude` command verbatim, even one that matches a bridge flag. So bridge flags go before `--claude`, and Claude Code flags go after: `bedrock-bridge -m moonshotai.kimi-k2.5 --log-level verbose --claude --verbose` runs the bridge at verbose and passes `--verbose` to `claude`.
+
+### Logging
+
+`--log-level` (or `$BEDROCK_BRIDGE_LOG_LEVEL`) sets bridge verbosity. Logs go to `/tmp/bedrock-bridge-<port>.log`.
+
+| Tier | Contents |
+|------|----------|
+| `default` | One access line per request, plus warnings and errors. |
+| `verbose` | Adds internal adaptation detail (model routing, vision adaptation, history-recall fixups, `describe_image` rounds). |
+| `debug` | Adds request and response content (prompt text, full request body and outgoing Converse kwargs; image bytes redacted). |
+
+`debug` writes prompt content to the log file, so it asks for interactive confirmation before starting and refuses to run on a non-TTY (there is no bypass flag). Use it to capture self-contained evidence for a bug report. See [docs/logging.md](./docs/logging.md).
 
 ### Resuming sessions
 
