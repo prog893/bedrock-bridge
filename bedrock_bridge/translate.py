@@ -331,6 +331,8 @@ def converse_to_anthropic(response: dict, metadata: dict) -> dict:
         "usage": {
             "input_tokens": usage.get("inputTokens", 0),
             "output_tokens": usage.get("outputTokens", 0),
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
         },
     }
 
@@ -505,7 +507,11 @@ def converse_stream_to_anthropic_events(
             {
                 "type": "message_delta",
                 "delta": {"stop_reason": _map_stop_reason(stop), "stop_sequence": None},
-                "usage": {"output_tokens": 0},
+                "usage": {
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                },
             },
         )
 
@@ -517,7 +523,10 @@ def converse_stream_to_anthropic_events(
                 "type": "message_delta",
                 "delta": {"stop_reason": "end_turn", "stop_sequence": None},
                 "usage": {
+                    "input_tokens": usage.get("inputTokens", 0),
                     "output_tokens": usage.get("outputTokens", 0),
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
                 },
             },
         )
