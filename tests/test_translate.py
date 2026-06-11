@@ -253,3 +253,6 @@ def test_stream_metadata_forwards_input_tokens() -> None:
     usage = next(e[1]["usage"] for e in out if e[0] == "message_delta")
     assert usage["input_tokens"] == 1500
     assert usage["output_tokens"] == 800
+    # Non-Claude models have no prompt cache, so these are always 0.
+    assert usage["cache_read_input_tokens"] == 0
+    assert usage["cache_creation_input_tokens"] == 0

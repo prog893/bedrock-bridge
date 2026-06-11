@@ -907,6 +907,7 @@ def _buffered_message_to_sse(response: dict, metadata: dict) -> Iterator[str]:
             "type": "message_delta",
             "delta": {"stop_reason": msg["stop_reason"], "stop_sequence": None},
             "usage": {
+                "input_tokens": msg["usage"]["input_tokens"],
                 "output_tokens": msg["usage"]["output_tokens"],
                 "cache_read_input_tokens": msg["usage"].get("cache_read_input_tokens", 0),
                 "cache_creation_input_tokens": msg["usage"].get("cache_creation_input_tokens", 0),
