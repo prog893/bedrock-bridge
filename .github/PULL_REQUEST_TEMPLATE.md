@@ -15,11 +15,9 @@ including AI agents (Claude Code) opening PRs.
   - Model(s) tested:
   - Score(s):
 
-### Why the grader cannot use this bridge
+### Judge path
 
-The e2e grader uses `claude -p` as an independent judge. That judge must reach
-Claude through a path other than bedrock-bridge (a first-party Anthropic API
-key, or native `CLAUDE_CODE_USE_BEDROCK=1`). Grading the bridge with a judge
-that itself runs on the bridge is circular: a translation bug would corrupt
-both the subject and the judge, and the bridge refuses Anthropic model IDs at
-preflight anyway. Configure the judge's Claude independently before running.
+The subject model runs through the bridge. The judge is a separate `claude -p`
+call that runs Claude natively (`CLAUDE_CODE_USE_BEDROCK=1` or a first-party API
+key) and does not go through the bridge, so a translation bug cannot skew the
+grade. Run the grader from a shell where `claude` is not pointed at the bridge.

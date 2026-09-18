@@ -70,6 +70,73 @@ def _restore_tool_use_id(short: str) -> str:
     return _short_to_id.get(short, short)
 
 
+# Anthropic's Messages API accepts `{"role": "system", ...}` entries inside
+# `messages` (mid-conversation operator instructions). Claude Code 2.x sends its
+# "# Environment" block this way, as the final entry after the user turn.
+# Converse only knows the user and assistant roles: Bedrock rejects a system
+# entry mid-history ("This model doesn't support system messages") and, when it
+# is the final entry, as a non-user last turn ("requires the last turn in the
+# conversation to be a user message"). Fold each one into the adjacent user
+# turn as a tagged text block. The tag is the one Claude Code already uses for
+# operator context inside user turns, so the model sees one consistent shape.
+_SYSTEM_MESSAGE_TAG = "system-reminder"
+
+
+def _system_message_text(msg: dict) -> str:
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return content
+    return "\n".join(b.get("text", "") for b in content if b.get("type") == "text" and b.get("text"))
+
+
+def _with_text_blocks(msg: dict, blocks: list[dict], before: bool = False) -> dict:
+    """Return a copy of `msg` with `blocks` added to its content list."""
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}] if content else []
+    merged = [*blocks, *content] if before else [*content, *blocks]
+    return {**msg, "content": merged}
+
+
+def _fold_system_messages(messages: list[dict]) -> tuple[list[dict], int]:
+    """Rewrite system-role entries in `messages` as user-turn text blocks.
+
+    A system entry is appended to the user turn directly before it (the
+    placement the Anthropic API requires, so this is the common case). With no
+    user turn before it, it is prepended to the next user turn, or emitted as
+    its own user turn when none follows. Either way user/assistant alternation
+    is preserved. Entries with no text (effort-only messages carry
+    `content: []`) are dropped. Returns the rewritten list and the number of
+    system entries removed.
+    """
+    out: list[dict] = []
+    pending: list[dict] = []
+    folded = 0
+    for msg in messages:
+        role = msg.get("role")
+        if role == "system":
+            folded += 1
+            text = _system_message_text(msg)
+            if not text:
+                continue
+            block = {"type": "text", "text": f"<{_SYSTEM_MESSAGE_TAG}>\n{text}\n</{_SYSTEM_MESSAGE_TAG}>"}
+            if out and out[-1].get("role") == "user":
+                out[-1] = _with_text_blocks(out[-1], [block])
+            else:
+                pending.append(block)
+            continue
+        if pending:
+            if role == "user":
+                msg = _with_text_blocks(msg, pending, before=True)
+            else:
+                out.append({"role": "user", "content": pending})
+            pending = []
+        out.append(msg)
+    if pending:
+        out.append({"role": "user", "content": pending})
+    return out, folded
+
+
 def anthropic_to_converse(body: dict) -> tuple[dict, dict]:
     """Convert Anthropic Messages API request → Bedrock converse() kwargs.
 
@@ -78,11 +145,10 @@ def anthropic_to_converse(body: dict) -> tuple[dict, dict]:
     """
     kwargs: dict[str, Any] = {}
 
-    # Messages
-    messages = []
-    for msg in body.get("messages", []):
-        messages.append(_convert_message(msg))
-    kwargs["messages"] = messages
+    # Messages. System-role entries are folded into user turns first; Converse
+    # has no role for them (see _fold_system_messages).
+    folded_messages, n_system = _fold_system_messages(body.get("messages", []))
+    kwargs["messages"] = [_convert_message(msg) for msg in folded_messages]
 
     # System prompt
     if system := body.get("system"):
@@ -114,7 +180,7 @@ def anthropic_to_converse(body: dict) -> tuple[dict, dict]:
         if client_tools:
             kwargs["toolConfig"] = {"tools": client_tools}
 
-    metadata = {"model": body.get("model", "unknown")}
+    metadata = {"model": body.get("model", "unknown"), "system_messages_folded": n_system}
     return kwargs, metadata
 
 
