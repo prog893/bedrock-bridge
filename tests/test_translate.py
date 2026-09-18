@@ -256,3 +256,107 @@ def test_stream_metadata_forwards_input_tokens() -> None:
     # Non-Claude models have no prompt cache, so these are always 0.
     assert usage["cache_read_input_tokens"] == 0
     assert usage["cache_creation_input_tokens"] == 0
+
+
+# Claude Code sends its "# Environment" block as a `role: "system"` entry at the
+# end of `messages` (the Anthropic API's mid-conversation system message).
+# Converse has no system role: Bedrock rejects the final-entry case with
+# "requires the last turn in the conversation to be a user message" and the
+# mid-history case with "This model doesn't support system messages". The entry
+# must become a tagged text block on the preceding user turn.
+def test_system_role_last_entry_folded_into_preceding_user_turn() -> None:
+    body = {
+        "model": "m",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {"role": "system", "content": [{"type": "text", "text": "# Environment\ncwd: /tmp"}]},
+        ],
+    }
+    kwargs, metadata = anthropic_to_converse(body)
+    msgs = kwargs["messages"]
+    assert [m["role"] for m in msgs] == ["user"]
+    assert msgs[0]["content"] == [
+        {"text": "hi"},
+        {"text": "<system-reminder>\n# Environment\ncwd: /tmp\n</system-reminder>"},
+    ]
+    assert metadata["system_messages_folded"] == 1
+
+
+# String-form content on both sides folds the same way.
+def test_system_role_string_content_folded() -> None:
+    body = {
+        "model": "m",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "env"},
+        ],
+    }
+    msgs = _converted_messages(body)
+    assert msgs == [
+        {"role": "user", "content": [{"text": "hi"}, {"text": "<system-reminder>\nenv\n</system-reminder>"}]}
+    ]
+
+
+# A system entry between a user turn and the assistant reply (the other
+# placement the Anthropic API allows) attaches to the user turn before it, so
+# user/assistant alternation is unchanged.
+def test_system_role_mid_history_keeps_alternation() -> None:
+    body = {
+        "model": "m",
+        "messages": [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "env"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+        ],
+    }
+    msgs = _converted_messages(body)
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert msgs[0]["content"][1]["text"].startswith("<system-reminder>")
+    assert msgs[2]["content"] == [{"text": "q2"}]
+
+
+# Defensive placements the API forbids but a client might still emit: with no
+# user turn before it, the entry is prepended to the next user turn; after an
+# assistant turn with nothing following, it becomes its own user turn so the
+# request still ends on a user message.
+def test_system_role_without_preceding_user_turn_prepended_to_next() -> None:
+    body = {
+        "model": "m",
+        "messages": [
+            {"role": "system", "content": "env"},
+            {"role": "user", "content": "hi"},
+        ],
+    }
+    msgs = _converted_messages(body)
+    assert [m["role"] for m in msgs] == ["user"]
+    assert msgs[0]["content"] == [{"text": "<system-reminder>\nenv\n</system-reminder>"}, {"text": "hi"}]
+
+
+def test_system_role_after_assistant_becomes_own_user_turn() -> None:
+    body = {
+        "model": "m",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "system", "content": "env"},
+        ],
+    }
+    msgs = _converted_messages(body)
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert msgs[2]["content"] == [{"text": "<system-reminder>\nenv\n</system-reminder>"}]
+
+
+# Effort-only system messages carry `content: []`; there is nothing to carry
+# over, so the entry is removed without adding a placeholder block.
+def test_empty_system_role_entry_dropped() -> None:
+    body = {
+        "model": "m",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": []},
+        ],
+    }
+    kwargs, metadata = anthropic_to_converse(body)
+    assert kwargs["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
+    assert metadata["system_messages_folded"] == 1

@@ -694,6 +694,8 @@ async def messages(request: Request) -> Response:
 
     converse_kwargs, metadata = anthropic_to_converse(body)
     metadata["model"] = model_alias
+    if n_sys := metadata.get("system_messages_folded"):
+        logger.debug(f"folded {n_sys} system-role message(s) into user turns (Converse has no system role)")
     _trace(lambda: f"converse_kwargs: {json.dumps(_scrub_bytes_only(converse_kwargs), default=str)}")
     client = get_client()
 
