@@ -1,11 +1,12 @@
 # scripts/
 
-Dev-only tools. Not shipped with the Homebrew install; run from a source checkout.
+Dev-only tools. Not shipped with the installed package; run from a source checkout.
 
 | Script | Purpose |
 |--------|---------|
 | `e2e_grade.py` | Drive a model through the bridge to describe a known image, then score the output against `tests/fixtures/sample_01.annotation.md` using `claude -p` as an independent judge. Exits nonzero below the score threshold. |
 | `probe_tool_use.py` | Single-model raw Converse call to inspect how a given model emits `toolUse` blocks. Use when adding support for a new provider. |
+| `mirror-to-aws-samples.sh` | Copy tracked files into a local `aws-samples/sample-apj-sup-sa` checkout under `ai-coding-assistants/bedrock-bridge/`, dropping repo-root-only files and rewriting the README for the mirror. Does not commit or push. |
 
 ```bash
 ./.venv/bin/python scripts/e2e_grade.py --model moonshotai.kimi-k2.5

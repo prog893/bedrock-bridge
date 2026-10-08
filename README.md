@@ -4,9 +4,25 @@ Run Claude Code (and any Anthropic-API client) against any non-Claude Bedrock mo
 
 ## Install
 
+<!-- mirror:brew start -->
+With [Homebrew](https://brew.sh):
+
 ```bash
 brew tap prog893/tap
 brew install bedrock-bridge
+```
+
+<!-- mirror:brew end -->
+With [uv](https://docs.astral.sh/uv/), from source:
+
+```bash
+uv tool install git+https://github.com/prog893/bedrock-bridge.git
+```
+
+Or run it without installing:
+
+```bash
+uvx --from git+https://github.com/prog893/bedrock-bridge.git bedrock-bridge -m moonshotai.kimi-k2.5 --claude
 ```
 
 Prerequisites: macOS, AWS credentials, Bedrock model access enabled, IAM permissions ([docs/iam.md](./docs/iam.md)). For `--claude`: `claude` CLI on PATH (`brew install claude-code`).

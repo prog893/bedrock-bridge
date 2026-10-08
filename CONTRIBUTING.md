@@ -20,8 +20,7 @@ pytest                            # run the suite
 git config core.hooksPath scripts/git-hooks   # run tests on every commit
 ```
 
-The `[dev]` extra adds pytest; runtime installs (including the Homebrew
-formula) never pull it in.
+The `[dev]` extra adds pytest; runtime installs never pull it in.
 
 ## Tests
 
