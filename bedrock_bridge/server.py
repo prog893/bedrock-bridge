@@ -692,7 +692,7 @@ async def messages(request: Request) -> Response:
             n = _strip_images_from_body(body)
             logger.debug(f"vision adapt: stripped {n} image block(s); no vision model set")
 
-    converse_kwargs, metadata = anthropic_to_converse(body)
+    converse_kwargs, metadata = anthropic_to_converse(body, model_id)
     metadata["model"] = model_alias
     if n_sys := metadata.get("system_messages_folded"):
         logger.debug(f"folded {n_sys} system-role message(s) into user turns (Converse has no system role)")

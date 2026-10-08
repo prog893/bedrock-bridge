@@ -5,6 +5,8 @@ hit in the field. Inputs are hand-built minimal Anthropic/Bedrock payloads
 (no captured session data) so the public repo carries no PII.
 """
 
+import pytest
+
 from bedrock_bridge import translate
 from bedrock_bridge.translate import (
     _EMPTY_TEXT_PLACEHOLDER,
@@ -360,3 +362,59 @@ def test_empty_system_role_entry_dropped() -> None:
     kwargs, metadata = anthropic_to_converse(body)
     assert kwargs["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
     assert metadata["system_messages_folded"] == 1
+
+
+# Claude Code sends `output_config.effort`; Converse has no standard field, so
+# it is mapped to `reasoning_effort` in additionalModelRequestFields only for
+# models measured to take it.
+def _effort_fields(model_id: str | None, effort: str | None) -> dict | None:
+    body: dict = {"model": "m", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]}
+    if effort is not None:
+        body["output_config"] = {"effort": effort}
+    kwargs, _ = anthropic_to_converse(body, model_id)
+    return kwargs.get("additionalModelRequestFields")
+
+
+# GLM 5.3 takes low/high/max (omitting the field means max). Claude Code's
+# medium has no exact match and goes to high; xhigh goes to max.
+def test_effort_glm_5_3_maps_to_low_high_max() -> None:
+    got = {lvl: _effort_fields("global.zai.glm-5.3", lvl) for lvl in ("low", "medium", "high", "xhigh", "max")}
+    assert got == {
+        "low": {"reasoning_effort": "low"},
+        "medium": {"reasoning_effort": "high"},
+        "high": {"reasoning_effort": "high"},
+        "xhigh": {"reasoning_effort": "max"},
+        "max": {"reasoning_effort": "max"},
+    }
+
+
+# Models whose Bedrock validator stops at high reject xhigh and max with a
+# ValidationException; both are capped to high.
+def test_effort_capped_to_high_for_up_to_high_models() -> None:
+    for model_id in ("zai.glm-5", "zai.glm-4.7-flash", "moonshotai.kimi-k2.5", "moonshot.kimi-k2-thinking"):
+        assert _effort_fields(model_id, "medium") == {"reasoning_effort": "medium"}
+        assert _effort_fields(model_id, "xhigh") == {"reasoning_effort": "high"}
+        assert _effort_fields(model_id, "max") == {"reasoning_effort": "high"}
+
+
+# The cap is logged as a warning once per (model, level), not on every request.
+def test_effort_cap_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    translate._effort_capped_warned.clear()
+    with caplog.at_level("WARNING", logger="bedrock-bridge"):
+        for _ in range(3):
+            _effort_fields("zai.glm-5", "max")
+        _effort_fields("zai.glm-5", "high")
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == ["effort 'max' capped to 'high' for zai.glm-5: the model accepts reasoning_effort up to 'high'"]
+
+
+# Kimi K3's Converse path discards additionalModelRequestFields (even malformed
+# values are accepted), and unlisted models are unmeasured: no field for either.
+# No effort in the request, an unknown level, or no routed model: no field.
+def test_effort_not_sent_when_unsupported_or_absent() -> None:
+    assert _effort_fields("global.moonshotai.kimi-k3", "high") is None
+    assert _effort_fields("minimax.minimax-m2.5", "high") is None
+    assert _effort_fields("zai.glm-5.3x", "high") is None
+    assert _effort_fields("zai.glm-5", None) is None
+    assert _effort_fields("zai.glm-5", "ultra") is None
+    assert _effort_fields(None, "high") is None
