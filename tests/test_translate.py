@@ -391,7 +391,16 @@ def test_effort_glm_5_3_maps_to_low_high_max() -> None:
 # Models whose Bedrock validator stops at high reject xhigh and max with a
 # ValidationException; both go to high.
 def test_effort_capped_to_high_for_up_to_high_models() -> None:
-    for model_id in ("zai.glm-5", "zai.glm-4.7-flash", "moonshotai.kimi-k2.5", "moonshot.kimi-k2-thinking"):
+    for model_id in (
+        "zai.glm-5",
+        "zai.glm-4.7-flash",
+        "moonshotai.kimi-k2.5",
+        "moonshot.kimi-k2-thinking",
+        "qwen.qwen3-235b-a22b-2507-v1:0",
+        "mistral.magistral-small-2509",
+        "deepseek.v3.2",
+        "minimax.minimax-m2.5",
+    ):
         assert _effort_fields(model_id, "medium") == {"reasoning_effort": "medium"}
         assert _effort_fields(model_id, "xhigh") == {"reasoning_effort": "high"}
         assert _effort_fields(model_id, "max") == {"reasoning_effort": "high"}
@@ -413,13 +422,27 @@ def test_effort_substitution_warns_once(caplog: pytest.LogCaptureFixture) -> Non
     ]
 
 
-# Kimi K3's Converse path discards additionalModelRequestFields (even malformed
-# values are accepted), and unlisted models are unmeasured: no field for either.
-# No effort in the request, an unknown level, or no routed model: no field.
+# Unlisted models are unmeasured: no field. No effort in the request, an
+# unknown level, or no routed model: no field.
 def test_effort_not_sent_when_unsupported_or_absent() -> None:
-    assert _effort_fields("global.moonshotai.kimi-k3", "high") is None
-    assert _effort_fields("minimax.minimax-m2.5", "high") is None
+    assert _effort_fields("qwen.qwen3-coder-480b-a35b-v1:0", "high") is None
     assert _effort_fields("zai.glm-5.3x", "high") is None
     assert _effort_fields("zai.glm-5", None) is None
     assert _effort_fields("zai.glm-5", "ultra") is None
     assert _effort_fields(None, "high") is None
+
+
+# Kimi K3 and Grok 4.7 accept reasoning_effort on Converse but discard it (even
+# malformed values pass), so no field is sent and the drop is logged once per
+# model.
+def test_effort_dropped_with_warning_for_converse_discarding_models(caplog: pytest.LogCaptureFixture) -> None:
+    translate._effort_dropped_warned.clear()
+    with caplog.at_level("WARNING", logger="bedrock-bridge"):
+        for _ in range(2):
+            assert _effort_fields("global.moonshotai.kimi-k3", "high") is None
+        assert _effort_fields("global.xai.grok-4.7", "max") is None
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == [
+        "effort 'high' ignored for global.moonshotai.kimi-k3: the model discards reasoning_effort on Converse",
+        "effort 'max' ignored for global.xai.grok-4.7: the model discards reasoning_effort on Converse",
+    ]
