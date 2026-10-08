@@ -31,11 +31,13 @@ def test_text_turn_succeeds(bridge: BridgeClient) -> None:
 # the end of `messages`. Forwarded as-is, Bedrock rejected the request with
 # "requires the last turn in the conversation to be a user message" and Claude
 # Code retried the same body ten times. The bridge must fold the entry into the
-# preceding user turn and the model must still see its content.
+# preceding user turn and the model must still see its content. max_tokens has
+# headroom because minimax reasons first (35-64 tokens measured); at 64 it
+# sometimes stopped on max_tokens with no text block.
 def test_trailing_system_role_message_is_folded(bridge: BridgeClient) -> None:
     status, body = bridge.messages(
         {
-            "max_tokens": 64,
+            "max_tokens": 512,
             "messages": [
                 {"role": "user", "content": "What is my working directory? Reply with the path only."},
                 {
