@@ -30,6 +30,10 @@
 
 set -euo pipefail
 
+# git runs against two repos here; inherited hook variables (GIT_DIR,
+# GIT_INDEX_FILE, ...) must not redirect either call.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
+
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST_ROOT="${1:-}"
 SUBDIR="ai-coding-assistants/bedrock-bridge"
@@ -54,7 +58,12 @@ echo "dest: $DEST"
 
 # The wipe below is permanent for anything not committed in the aws-samples
 # checkout, so require a clean subdir first.
-if [[ -n "$(git -C "$DEST_ROOT" status --porcelain -- "$SUBDIR")" ]]; then
+# Capture separately: inside [[ ]] a failing git status reads as clean.
+dirty="$(git -C "$DEST_ROOT" status --porcelain -- "$SUBDIR")" || {
+  echo "error: git status failed in $DEST_ROOT" >&2
+  exit 1
+}
+if [[ -n "$dirty" ]]; then
   echo "error: $SUBDIR has uncommitted changes in $DEST_ROOT; commit or stash them first" >&2
   git -C "$DEST_ROOT" status --short -- "$SUBDIR" >&2
   exit 1
