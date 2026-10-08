@@ -124,6 +124,10 @@ def grade(description: str, timeout: int) -> dict:
     if p.returncode != 0:
         raise RuntimeError(f"judge run failed (rc={p.returncode}):\n{raw}")
     envelope = json.loads(raw)
+    # Newer CLI versions (seen on 2.1.293) emit the whole event list; the
+    # envelope is the final `type: "result"` event.
+    if isinstance(envelope, list):
+        envelope = next(e for e in reversed(envelope) if e.get("type") == "result")
     # With --json-schema, `claude --output-format json` puts the schema-shaped
     # payload in `structured_output`; `result` holds the prose form. Prefer the
     # structured field, fall back to parsing result for older CLI versions.
