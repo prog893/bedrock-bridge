@@ -486,6 +486,14 @@ def test_effort_not_sent_when_unsupported_or_absent() -> None:
     assert _effort_fields(None, "high") is None
 
 
+# A malformed output_config (not an object) must be ignored, not raise before
+# the server's Bedrock error handling runs.
+def test_effort_ignores_non_object_output_config() -> None:
+    body = {"model": "m", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}], "output_config": "max"}
+    kwargs, _ = anthropic_to_converse(body, "zai.glm-5")
+    assert "additionalModelRequestFields" not in kwargs
+
+
 # Kimi K3 and Grok 4.7 accept reasoning_effort on Converse but discard it (even
 # malformed values pass), so no field is sent and the drop is logged once per
 # model.

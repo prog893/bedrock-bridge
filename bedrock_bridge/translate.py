@@ -232,8 +232,10 @@ def anthropic_to_converse(body: dict, model_id: str | None = None) -> tuple[dict
         kwargs["inferenceConfig"] = inf
 
     # Reasoning effort, for the models that take it (see _EFFORT_BY_MODEL).
-    # The rest of output_config (`format`) has no Converse equivalent.
-    level = (body.get("output_config") or {}).get("effort")
+    # The bridge does not translate the rest of output_config (`format`) yet;
+    # Converse's counterpart would be outputConfig.textFormat.
+    output_config = body.get("output_config")
+    level = output_config.get("effort") if isinstance(output_config, dict) else None
     if model_id and level and (effort := _reasoning_effort(model_id, level)):
         kwargs["additionalModelRequestFields"] = {"reasoning_effort": effort}
         logger.debug(f"effort {level!r} -> reasoning_effort={effort!r} for {model_id}")
