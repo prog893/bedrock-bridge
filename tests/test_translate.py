@@ -255,9 +255,63 @@ def test_stream_metadata_forwards_input_tokens() -> None:
     usage = next(e[1]["usage"] for e in out if e[0] == "message_delta")
     assert usage["input_tokens"] == 1500
     assert usage["output_tokens"] == 800
-    # Non-Claude models have no prompt cache, so these are always 0.
+    # No cache counts in the event: report 0.
     assert usage["cache_read_input_tokens"] == 0
     assert usage["cache_creation_input_tokens"] == 0
+
+
+# Models with implicit prompt caching (GLM 5.3 reported inputTokens 2 with
+# cacheReadInputTokens 2106) must surface the cached counts: Claude Code sums
+# input + cache fields for its context gauge and auto-compact trigger, and
+# dropping them made it see a 2-token context.
+def test_stream_metadata_forwards_cache_tokens() -> None:
+    event = {
+        "metadata": {
+            "usage": {"inputTokens": 2, "outputTokens": 42, "cacheReadInputTokens": 2106, "cacheWriteInputTokens": 7}
+        }
+    }
+    out = list(converse_stream_to_anthropic_events(event, {"model": "m"}, {}))
+    usage = next(e[1]["usage"] for e in out if e[0] == "message_delta")
+    assert usage == {
+        "input_tokens": 2,
+        "output_tokens": 42,
+        "cache_read_input_tokens": 2106,
+        "cache_creation_input_tokens": 7,
+    }
+
+
+def test_buffered_response_forwards_cache_tokens() -> None:
+    response = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 2, "outputTokens": 1, "cacheReadInputTokens": 2106, "cacheWriteInputTokens": 0},
+    }
+    usage = translate.converse_to_anthropic(response, {"model": "m"})["usage"]
+    assert usage["cache_read_input_tokens"] == 2106
+    assert usage["cache_creation_input_tokens"] == 0
+
+
+# Bedrock streams messageStop (stopReason tool_use) and then metadata (usage).
+# The metadata message_delta used to hardcode stop_reason end_turn, and the
+# client keeps the last one, so streamed tool calls ended as end_turn. Event
+# sequence from a glm-5.3 Read-tool probe.
+def test_stream_tool_use_stop_reason_survives_metadata() -> None:
+    state: dict = {}
+    events = [
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockStart": {"start": {"toolUse": {"toolUseId": "call_0", "name": "Read"}}, "contentBlockIndex": 0}},
+        {"contentBlockDelta": {"delta": {"toolUse": {"input": '{"file_path":"/tmp/x"}'}}, "contentBlockIndex": 0}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"messageStop": {"stopReason": "tool_use"}},
+        {"metadata": {"usage": {"inputTokens": 2, "outputTokens": 42}}},
+    ]
+    deltas = [
+        data
+        for ev in events
+        for etype, data in converse_stream_to_anthropic_events(ev, {"model": "m"}, state)
+        if etype == "message_delta"
+    ]
+    assert [d["delta"]["stop_reason"] for d in deltas] == ["tool_use", "tool_use"]
 
 
 # Claude Code sends its "# Environment" block as a `role: "system"` entry at the
