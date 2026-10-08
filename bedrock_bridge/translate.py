@@ -394,12 +394,20 @@ def converse_to_anthropic(response: dict, metadata: dict) -> dict:
         "model": metadata.get("model", "unknown"),
         "stop_reason": _map_stop_reason(stop),
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": usage.get("inputTokens", 0),
-            "output_tokens": usage.get("outputTokens", 0),
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
-        },
+        "usage": _anthropic_usage(usage),
+    }
+
+
+def _anthropic_usage(usage: dict) -> dict:
+    """Bedrock usage → Anthropic usage. Bedrock's inputTokens already excludes
+    cached tokens, matching Anthropic's input_tokens; the cache counts map
+    across directly. Claude Code sums all of these for its context gauge and
+    auto-compact trigger, so dropping the cache counts makes it under-report."""
+    return {
+        "input_tokens": usage.get("inputTokens", 0),
+        "output_tokens": usage.get("outputTokens", 0),
+        "cache_read_input_tokens": usage.get("cacheReadInputTokens", 0),
+        "cache_creation_input_tokens": usage.get("cacheWriteInputTokens", 0),
     }
 
 
@@ -567,12 +575,12 @@ def converse_stream_to_anthropic_events(
         )
 
     elif "messageStop" in event:
-        stop = event["messageStop"].get("stopReason", "end_turn")
+        state["stop_reason"] = _map_stop_reason(event["messageStop"].get("stopReason", "end_turn"))
         yield (
             "message_delta",
             {
                 "type": "message_delta",
-                "delta": {"stop_reason": _map_stop_reason(stop), "stop_sequence": None},
+                "delta": {"stop_reason": state["stop_reason"], "stop_sequence": None},
                 "usage": {
                     "output_tokens": 0,
                     "cache_read_input_tokens": 0,
@@ -582,18 +590,16 @@ def converse_stream_to_anthropic_events(
         )
 
     elif "metadata" in event:
-        usage = event["metadata"].get("usage", {})
+        # Bedrock sends metadata after messageStop. This delta carries the final
+        # usage and must repeat the stop reason messageStop set: the client
+        # keeps the last one, so a hardcoded end_turn here turned every
+        # streamed tool_use turn into end_turn.
         yield (
             "message_delta",
             {
                 "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                "usage": {
-                    "input_tokens": usage.get("inputTokens", 0),
-                    "output_tokens": usage.get("outputTokens", 0),
-                    "cache_read_input_tokens": 0,
-                    "cache_creation_input_tokens": 0,
-                },
+                "delta": {"stop_reason": state.get("stop_reason", "end_turn"), "stop_sequence": None},
+                "usage": _anthropic_usage(event["metadata"].get("usage", {})),
             },
         )
 
