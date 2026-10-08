@@ -375,21 +375,21 @@ def _effort_fields(model_id: str | None, effort: str | None) -> dict | None:
     return kwargs.get("additionalModelRequestFields")
 
 
-# GLM 5.3 takes low/high/max (omitting the field means max). Claude Code's
-# medium has no exact match and goes to high; xhigh goes to max.
+# GLM 5.3 takes low/high/max (omitting the field means max). Levels it lacks
+# go to the highest supported value below them: medium -> low, xhigh -> high.
 def test_effort_glm_5_3_maps_to_low_high_max() -> None:
     got = {lvl: _effort_fields("global.zai.glm-5.3", lvl) for lvl in ("low", "medium", "high", "xhigh", "max")}
     assert got == {
         "low": {"reasoning_effort": "low"},
-        "medium": {"reasoning_effort": "high"},
+        "medium": {"reasoning_effort": "low"},
         "high": {"reasoning_effort": "high"},
-        "xhigh": {"reasoning_effort": "max"},
+        "xhigh": {"reasoning_effort": "high"},
         "max": {"reasoning_effort": "max"},
     }
 
 
 # Models whose Bedrock validator stops at high reject xhigh and max with a
-# ValidationException; both are capped to high.
+# ValidationException; both go to high.
 def test_effort_capped_to_high_for_up_to_high_models() -> None:
     for model_id in ("zai.glm-5", "zai.glm-4.7-flash", "moonshotai.kimi-k2.5", "moonshot.kimi-k2-thinking"):
         assert _effort_fields(model_id, "medium") == {"reasoning_effort": "medium"}
@@ -397,15 +397,20 @@ def test_effort_capped_to_high_for_up_to_high_models() -> None:
         assert _effort_fields(model_id, "max") == {"reasoning_effort": "high"}
 
 
-# The cap is logged as a warning once per (model, level), not on every request.
-def test_effort_cap_warns_once(caplog: pytest.LogCaptureFixture) -> None:
-    translate._effort_capped_warned.clear()
+# A substitution is logged as a warning once per (model, level), naming the
+# supported values; supported levels log nothing.
+def test_effort_substitution_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    translate._effort_substituted_warned.clear()
     with caplog.at_level("WARNING", logger="bedrock-bridge"):
         for _ in range(3):
             _effort_fields("zai.glm-5", "max")
         _effort_fields("zai.glm-5", "high")
+        _effort_fields("global.zai.glm-5.3", "xhigh")
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
-    assert warnings == ["effort 'max' capped to 'high' for zai.glm-5: the model accepts reasoning_effort up to 'high'"]
+    assert warnings == [
+        "effort 'max' is not supported by zai.glm-5; using 'high' (supported: low, medium, high)",
+        "effort 'xhigh' is not supported by global.zai.glm-5.3; using 'high' (supported: low, high, max)",
+    ]
 
 
 # Kimi K3's Converse path discards additionalModelRequestFields (even malformed

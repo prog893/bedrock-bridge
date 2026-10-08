@@ -283,7 +283,7 @@ def test_streaming_text_turn(bridge: BridgeClient) -> None:
 
 # Claude Code's effort level reaches Kimi K2.5 as reasoning_effort. Bedrock
 # rejects 'max' for it ("value 'max' is not supported by this model"), so the
-# bridge must cap max to high and log the cap.
+# bridge must send high instead and log the substitution.
 def test_effort_max_capped_to_high_on_kimi_k2_5(bridge_image: BridgeClient) -> None:
     status, body = bridge_image.messages(
         {
@@ -293,7 +293,7 @@ def test_effort_max_capped_to_high_on_kimi_k2_5(bridge_image: BridgeClient) -> N
         }
     )
     assert status == 200, body
-    assert "capped to 'high'" in bridge_image.read_log()
+    assert "effort 'max' is not supported by moonshotai.kimi-k2.5; using 'high'" in bridge_image.read_log()
 
 
 # 1x1 red PNG, base64. Smallest valid image payload; contents are irrelevant
