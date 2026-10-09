@@ -351,7 +351,9 @@ def _convert_message(msg: dict) -> dict:
     content = msg.get("content", "")
 
     if isinstance(content, str):
-        return {"role": role, "content": [{"text": content}]}
+        # Same blank-text rule as the block path below: an empty string would
+        # reach Converse as a blank text block, which it rejects in user turns.
+        return {"role": role, "content": [{"text": content or _EMPTY_TEXT_PLACEHOLDER}]}
 
     blocks: list[dict] = []
     for block in content:
