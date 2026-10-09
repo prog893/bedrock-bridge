@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import re
 from collections.abc import Iterator
 from typing import Any
+
+logger = logging.getLogger("bedrock-bridge")
 
 # Bedrock Converse enforces a 64-char limit on both toolSpec.name and
 # toolUse(Result).toolUseId, plus a charset constraint on each:
@@ -137,11 +140,68 @@ def _fold_system_messages(messages: list[dict]) -> tuple[list[dict], int]:
     return out, folded
 
 
-def anthropic_to_converse(body: dict) -> tuple[dict, dict]:
+# Claude Code sends `output_config.effort` (low, medium, high, xhigh, max).
+# Converse has no standard field for it; the models below take
+# `reasoning_effort` through additionalModelRequestFields and validate the
+# value (measured 2026-10-08/09, see docs/architecture.md). Each entry lists
+# the values the model supports; a level it lacks goes to the highest supported
+# value below it. Unlisted models get no field.
+_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+_UP_TO_HIGH = ("low", "medium", "high")
+_EFFORT_BY_MODEL: dict[str, tuple[str, ...]] = {
+    "zai.glm-5.3": ("low", "high", "max"),
+    "zai.glm-5": _UP_TO_HIGH,
+    "zai.glm-4.7": _UP_TO_HIGH,
+    "zai.glm-4.7-flash": _UP_TO_HIGH,
+    "moonshotai.kimi-k2.5": _UP_TO_HIGH,
+    "moonshot.kimi-k2-thinking": _UP_TO_HIGH,
+    "qwen.qwen3-235b-a22b-2507-v1:0": _UP_TO_HIGH,
+    "mistral.magistral-small-2509": _UP_TO_HIGH,
+    "deepseek.v3.2": _UP_TO_HIGH,
+    "minimax.minimax-m2.5": _UP_TO_HIGH,
+    "minimax.minimax-m2.1": _UP_TO_HIGH,
+}
+# These accept reasoning_effort on Converse but discard it (and every other
+# additionalModelRequestFields key, even malformed values), so no field is
+# sent and the drop is logged. Their effort control works on Chat Completions.
+_EFFORT_DISCARDED_ON_CONVERSE = frozenset({"moonshotai.kimi-k3", "xai.grok-4.7"})
+_PROFILE_PREFIX = re.compile(r"^(global|us|eu|apac|jp|in|au|apne\d)\.")
+_effort_substituted_warned: set[tuple[str, str]] = set()
+_effort_dropped_warned: set[str] = set()
+
+
+def _reasoning_effort(model_id: str, level: Any) -> str | None:
+    """Model-specific `reasoning_effort` for Claude Code's effort level, or None
+    when the model takes no such field. Warns once per (model, level) when the
+    level is unsupported and a lower one is used instead, and once per model
+    when the model discards effort on Converse."""
+    base_id = _PROFILE_PREFIX.sub("", model_id)
+    if base_id in _EFFORT_DISCARDED_ON_CONVERSE:
+        if model_id not in _effort_dropped_warned:
+            _effort_dropped_warned.add(model_id)
+            logger.warning(f"effort {level!r} ignored for {model_id}: the model discards reasoning_effort on Converse")
+        return None
+    supported = _EFFORT_BY_MODEL.get(base_id)
+    if supported is None or level not in _EFFORT_LEVELS:
+        return None
+    if level in supported:
+        return level
+    rank = _EFFORT_LEVELS.index(level)
+    value = max((v for v in supported if _EFFORT_LEVELS.index(v) < rank), key=_EFFORT_LEVELS.index)
+    if (model_id, level) not in _effort_substituted_warned:
+        _effort_substituted_warned.add((model_id, level))
+        logger.warning(
+            f"effort {level!r} is not supported by {model_id}; using {value!r} (supported: {', '.join(supported)})"
+        )
+    return value
+
+
+def anthropic_to_converse(body: dict, model_id: str | None = None) -> tuple[dict, dict]:
     """Convert Anthropic Messages API request → Bedrock converse() kwargs.
 
-    Returns (converse_kwargs, metadata) where metadata has info needed
-    to build the Anthropic-shaped response.
+    `model_id` is the routed Bedrock model; it selects model-specific request
+    fields (reasoning effort). Returns (converse_kwargs, metadata) where
+    metadata has info needed to build the Anthropic-shaped response.
     """
     kwargs: dict[str, Any] = {}
 
@@ -170,6 +230,15 @@ def anthropic_to_converse(body: dict) -> tuple[dict, dict]:
     # serve Anthropic targets (preflight refuses anthropic.* main IDs).
     if inf:
         kwargs["inferenceConfig"] = inf
+
+    # Reasoning effort, for the models that take it (see _EFFORT_BY_MODEL).
+    # The bridge does not translate the rest of output_config (`format`) yet;
+    # Converse's counterpart would be outputConfig.textFormat.
+    output_config = body.get("output_config")
+    level = output_config.get("effort") if isinstance(output_config, dict) else None
+    if model_id and level and (effort := _reasoning_effort(model_id, level)):
+        kwargs["additionalModelRequestFields"] = {"reasoning_effort": effort}
+        logger.debug(f"effort {level!r} -> reasoning_effort={effort!r} for {model_id}")
 
     # Tools. Server-side Anthropic tools (web_search_*, computer_*, bash_*,
     # text_editor_*) execute on Anthropic's servers; Bedrock Converse has no

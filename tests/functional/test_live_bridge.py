@@ -281,6 +281,21 @@ def test_streaming_text_turn(bridge: BridgeClient) -> None:
     assert "ValidationException" not in raw
 
 
+# Claude Code's effort level reaches Kimi K2.5 as reasoning_effort. Bedrock
+# rejects 'max' for it ("value 'max' is not supported by this model"), so the
+# bridge must send high instead and log the substitution.
+def test_effort_max_capped_to_high_on_kimi_k2_5(bridge_image: BridgeClient) -> None:
+    status, body = bridge_image.messages(
+        {
+            "max_tokens": 2048,
+            "output_config": {"effort": "max"},
+            "messages": [{"role": "user", "content": "Reply with OK."}],
+        }
+    )
+    assert status == 200, body
+    assert "effort 'max' is not supported by moonshotai.kimi-k2.5; using 'high'" in bridge_image.read_log()
+
+
 # 1x1 red PNG, base64. Smallest valid image payload; contents are irrelevant
 # for these tests, which assert on envelope shape rather than perception.
 _RED_PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="

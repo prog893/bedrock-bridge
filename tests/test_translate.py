@@ -5,6 +5,8 @@ hit in the field. Inputs are hand-built minimal Anthropic/Bedrock payloads
 (no captured session data) so the public repo carries no PII.
 """
 
+import pytest
+
 from bedrock_bridge import translate
 from bedrock_bridge.translate import (
     _EMPTY_TEXT_PLACEHOLDER,
@@ -414,3 +416,95 @@ def test_empty_system_role_entry_dropped() -> None:
     kwargs, metadata = anthropic_to_converse(body)
     assert kwargs["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
     assert metadata["system_messages_folded"] == 1
+
+
+# Claude Code sends `output_config.effort`; Converse has no standard field, so
+# it is mapped to `reasoning_effort` in additionalModelRequestFields only for
+# models measured to take it.
+def _effort_fields(model_id: str | None, effort: str | None) -> dict | None:
+    body: dict = {"model": "m", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]}
+    if effort is not None:
+        body["output_config"] = {"effort": effort}
+    kwargs, _ = anthropic_to_converse(body, model_id)
+    return kwargs.get("additionalModelRequestFields")
+
+
+# GLM 5.3 takes low/high/max (omitting the field means max). Levels it lacks
+# go to the highest supported value below them: medium -> low, xhigh -> high.
+def test_effort_glm_5_3_maps_to_low_high_max() -> None:
+    got = {lvl: _effort_fields("global.zai.glm-5.3", lvl) for lvl in ("low", "medium", "high", "xhigh", "max")}
+    assert got == {
+        "low": {"reasoning_effort": "low"},
+        "medium": {"reasoning_effort": "low"},
+        "high": {"reasoning_effort": "high"},
+        "xhigh": {"reasoning_effort": "high"},
+        "max": {"reasoning_effort": "max"},
+    }
+
+
+# Models whose Bedrock validator stops at high reject xhigh and max with a
+# ValidationException; both go to high.
+def test_effort_capped_to_high_for_up_to_high_models() -> None:
+    for model_id in (
+        "zai.glm-5",
+        "zai.glm-4.7-flash",
+        "moonshotai.kimi-k2.5",
+        "moonshot.kimi-k2-thinking",
+        "qwen.qwen3-235b-a22b-2507-v1:0",
+        "mistral.magistral-small-2509",
+        "deepseek.v3.2",
+        "minimax.minimax-m2.5",
+    ):
+        assert _effort_fields(model_id, "medium") == {"reasoning_effort": "medium"}
+        assert _effort_fields(model_id, "xhigh") == {"reasoning_effort": "high"}
+        assert _effort_fields(model_id, "max") == {"reasoning_effort": "high"}
+
+
+# A substitution is logged as a warning once per (model, level), naming the
+# supported values; supported levels log nothing.
+def test_effort_substitution_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    translate._effort_substituted_warned.clear()
+    with caplog.at_level("WARNING", logger="bedrock-bridge"):
+        for _ in range(3):
+            _effort_fields("zai.glm-5", "max")
+        _effort_fields("zai.glm-5", "high")
+        _effort_fields("global.zai.glm-5.3", "xhigh")
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == [
+        "effort 'max' is not supported by zai.glm-5; using 'high' (supported: low, medium, high)",
+        "effort 'xhigh' is not supported by global.zai.glm-5.3; using 'high' (supported: low, high, max)",
+    ]
+
+
+# Unlisted models are unmeasured: no field. No effort in the request, an
+# unknown level, or no routed model: no field.
+def test_effort_not_sent_when_unsupported_or_absent() -> None:
+    assert _effort_fields("qwen.qwen3-coder-480b-a35b-v1:0", "high") is None
+    assert _effort_fields("zai.glm-5.3x", "high") is None
+    assert _effort_fields("zai.glm-5", None) is None
+    assert _effort_fields("zai.glm-5", "ultra") is None
+    assert _effort_fields(None, "high") is None
+
+
+# A malformed output_config (not an object) must be ignored, not raise before
+# the server's Bedrock error handling runs.
+def test_effort_ignores_non_object_output_config() -> None:
+    body = {"model": "m", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}], "output_config": "max"}
+    kwargs, _ = anthropic_to_converse(body, "zai.glm-5")
+    assert "additionalModelRequestFields" not in kwargs
+
+
+# Kimi K3 and Grok 4.7 accept reasoning_effort on Converse but discard it (even
+# malformed values pass), so no field is sent and the drop is logged once per
+# model.
+def test_effort_dropped_with_warning_for_converse_discarding_models(caplog: pytest.LogCaptureFixture) -> None:
+    translate._effort_dropped_warned.clear()
+    with caplog.at_level("WARNING", logger="bedrock-bridge"):
+        for _ in range(2):
+            assert _effort_fields("global.moonshotai.kimi-k3", "high") is None
+        assert _effort_fields("global.xai.grok-4.7", "max") is None
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == [
+        "effort 'high' ignored for global.moonshotai.kimi-k3: the model discards reasoning_effort on Converse",
+        "effort 'max' ignored for global.xai.grok-4.7: the model discards reasoning_effort on Converse",
+    ]
