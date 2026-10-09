@@ -199,11 +199,22 @@ def _reasoning_effort(model_id: str, level: Any) -> str | None:
 _REASONING_BLOCK_TYPES = ("thinking", "redacted_thinking")
 
 
+def _content_blocks(content: Any) -> list[dict]:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    return list(content or [])
+
+
 def _strip_reasoning_history(messages: list[dict]) -> tuple[list[dict], int]:
     """Drop thinking blocks from every assistant turn in the request. All of
     them are prior turns: the reasoning of the response being generated is
     never sent back. Returns the rewritten list and the number of blocks
-    removed. A turn left empty gets the usual placeholder in _convert_message."""
+    removed.
+
+    A turn that held only reasoning (plus empty text, which GLM streams before
+    its reasoning) is dropped and the user turns around it are merged, keeping
+    alternation. Replacing it with the "[empty]" placeholder instead led GLM 5.3
+    to answer "[empty]" in a real session."""
     out: list[dict] = []
     stripped = 0
     for msg in messages:
@@ -211,7 +222,12 @@ def _strip_reasoning_history(messages: list[dict]) -> tuple[list[dict], int]:
         if msg.get("role") == "assistant" and isinstance(content, list):
             kept = [b for b in content if b.get("type") not in _REASONING_BLOCK_TYPES]
             stripped += len(content) - len(kept)
+            if len(kept) < len(content) and not any(b.get("type") != "text" or b.get("text") for b in kept):
+                continue
             msg = {**msg, "content": kept}
+        if msg.get("role") == "user" and out and out[-1].get("role") == "user":
+            out[-1] = {**out[-1], "content": _content_blocks(out[-1].get("content")) + _content_blocks(content)}
+            continue
         out.append(msg)
     return out, stripped
 

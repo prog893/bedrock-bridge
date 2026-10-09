@@ -557,7 +557,55 @@ def test_reasoning_history_stripped_from_every_assistant_turn() -> None:
     assert kwargs["messages"][1]["content"] == [
         {"toolUse": {"toolUseId": "t1", "name": "Read", "input": {"file_path": "/x"}}}
     ]
-    assert kwargs["messages"][2]["content"][0]["toolResult"]["toolUseId"] == "t1"
-    # A turn that held only reasoning keeps a non-blank placeholder so Bedrock
-    # accepts it.
-    assert kwargs["messages"][3]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}]
+    # The turn that held only reasoning is dropped and the user turns around it
+    # merge, so alternation holds and no "[empty]" placeholder is sent (GLM 5.3
+    # echoed that placeholder back as its answer in a real session).
+    assert [m["role"] for m in kwargs["messages"]] == ["user", "assistant", "user"]
+    merged = kwargs["messages"][2]["content"]
+    assert merged[0]["toolResult"]["toolUseId"] == "t1"
+    assert merged[-1] == {"text": "thanks"}
+    assert all(b != {"text": _EMPTY_TEXT_PLACEHOLDER} for m in kwargs["messages"] for b in m["content"])
+
+
+# GLM streams an empty text delta before its reasoning, so a reasoning-only
+# turn arrives as thinking plus an empty text block. It counts as reasoning-only.
+def test_reasoning_only_turn_with_empty_text_is_dropped() -> None:
+    body = {
+        "model": "m",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "thinking", "thinking": "Nothing to say.", "signature": ""},
+                ],
+            },
+            {"role": "user", "content": "again"},
+        ],
+    }
+    kwargs, metadata = anthropic_to_converse(body, strip_reasoning_history=True)
+    assert kwargs["messages"] == [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]
+    assert metadata["reasoning_blocks_stripped"] == 1
+
+
+# An assistant turn with visible text keeps that text; only the reasoning goes.
+def test_reasoning_stripped_text_kept() -> None:
+    body = {
+        "model": "m",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Greet back.", "signature": ""},
+                    {"type": "text", "text": "Hello!"},
+                ],
+            },
+            {"role": "user", "content": "again"},
+        ],
+    }
+    kwargs, _ = anthropic_to_converse(body, strip_reasoning_history=True)
+    assert kwargs["messages"][1] == {"role": "assistant", "content": [{"text": "Hello!"}]}
