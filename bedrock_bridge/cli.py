@@ -35,6 +35,7 @@ LOGO = r"""
 ENV_MAIN = "BEDROCK_BRIDGE_MODEL"
 ENV_LIGHT = "BEDROCK_BRIDGE_MODEL_LIGHT"
 ENV_VISION = "BEDROCK_BRIDGE_MODEL_VISION"
+ENV_STRIP_REASONING = "BEDROCK_BRIDGE_STRIP_REASONING_HISTORY"
 
 # Inference-profile ID prefixes; non-region-pinned cross-region invocation.
 _PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.", "apne1.", "apne2.", "apne3.")
@@ -271,6 +272,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
     region = _resolve_region(args.region)
     port = find_free_port()
     tier = (args.log_level or os.environ.get("BEDROCK_BRIDGE_LOG_LEVEL", "default")).strip().lower()
+    strip_reasoning = args.strip_reasoning_history or os.environ.get(ENV_STRIP_REASONING, "") == "1"
 
     print(LOGO)
     print(f"  Main:   {main_id}")
@@ -279,6 +281,8 @@ def cmd_launch(args: argparse.Namespace) -> None:
     if vision_id:
         print(f"  Vision: {vision_id}")
     print(f"  Proxy:  http://127.0.0.1:{port}")
+    if strip_reasoning:
+        print("  Prior-turn reasoning: stripped (--strip-reasoning-history)")
     print()
 
     capabilities = preflight(region, main_id, light_id, vision_id)
@@ -295,6 +299,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
     if region:
         proxy_env["AWS_REGION"] = region
     proxy_env["BEDROCK_BRIDGE_LOG_LEVEL"] = tier
+    proxy_env[ENV_STRIP_REASONING] = "1" if strip_reasoning else ""
     # Scale uvicorn's own server/access logs with the tier.
     uvicorn_level = {"default": "warning", "verbose": "info", "debug": "debug"}.get(tier, "warning")
     proxy = subprocess.Popen(
@@ -493,6 +498,17 @@ def _build_launch_parser(prog: str) -> argparse.ArgumentParser:
             "adds request/response content (prompt text); logs PII to the log "
             "file and requires interactive confirmation. Falls back to "
             "$BEDROCK_BRIDGE_LOG_LEVEL, then default."
+        ),
+    )
+    p.add_argument(
+        "--strip-reasoning-history",
+        action="store_true",
+        help=(
+            "Drop thinking blocks from prior assistant turns before sending to "
+            "Bedrock. Off by default. Saves input tokens on long sessions; Kimi "
+            "K3's Bedrock model card asks for it on Converse multi-turn "
+            "requests, while some models are trained to see their earlier "
+            f"reasoning. Falls back to ${ENV_STRIP_REASONING}=1."
         ),
     )
     p.add_argument(

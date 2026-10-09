@@ -196,18 +196,61 @@ def _reasoning_effort(model_id: str, level: Any) -> str | None:
     return value
 
 
-def anthropic_to_converse(body: dict, model_id: str | None = None) -> tuple[dict, dict]:
+_REASONING_BLOCK_TYPES = ("thinking", "redacted_thinking")
+
+
+def _content_blocks(content: Any) -> list[dict]:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    return list(content or [])
+
+
+def _strip_reasoning_history(messages: list[dict]) -> tuple[list[dict], int]:
+    """Drop thinking blocks from every assistant turn in the request. All of
+    them are prior turns: the reasoning of the response being generated is
+    never sent back. Returns the rewritten list and the number of blocks
+    removed.
+
+    A turn that held only reasoning (plus empty text, which GLM streams before
+    its reasoning) is dropped and the user turns around it are merged, keeping
+    alternation. Replacing it with the "[empty]" placeholder instead led GLM 5.3
+    to answer "[empty]" in a real session."""
+    out: list[dict] = []
+    stripped = 0
+    for msg in messages:
+        content = msg.get("content")
+        if msg.get("role") == "assistant" and isinstance(content, list):
+            kept = [b for b in content if b.get("type") not in _REASONING_BLOCK_TYPES]
+            stripped += len(content) - len(kept)
+            if len(kept) < len(content) and not any(b.get("type") != "text" or b.get("text") for b in kept):
+                continue
+            msg = {**msg, "content": kept}
+        if msg.get("role") == "user" and out and out[-1].get("role") == "user":
+            out[-1] = {**out[-1], "content": _content_blocks(out[-1].get("content")) + _content_blocks(content)}
+            continue
+        out.append(msg)
+    return out, stripped
+
+
+def anthropic_to_converse(
+    body: dict, model_id: str | None = None, strip_reasoning_history: bool = False
+) -> tuple[dict, dict]:
     """Convert Anthropic Messages API request → Bedrock converse() kwargs.
 
     `model_id` is the routed Bedrock model; it selects model-specific request
-    fields (reasoning effort). Returns (converse_kwargs, metadata) where
-    metadata has info needed to build the Anthropic-shaped response.
+    fields (reasoning effort). `strip_reasoning_history` drops prior-turn
+    thinking blocks (opt-in, --strip-reasoning-history). Returns
+    (converse_kwargs, metadata) where metadata has info needed to build the
+    Anthropic-shaped response.
     """
     kwargs: dict[str, Any] = {}
 
     # Messages. System-role entries are folded into user turns first; Converse
     # has no role for them (see _fold_system_messages).
     folded_messages, n_system = _fold_system_messages(body.get("messages", []))
+    n_reasoning = 0
+    if strip_reasoning_history:
+        folded_messages, n_reasoning = _strip_reasoning_history(folded_messages)
     kwargs["messages"] = [_convert_message(msg) for msg in folded_messages]
 
     # System prompt
@@ -249,7 +292,11 @@ def anthropic_to_converse(body: dict, model_id: str | None = None) -> tuple[dict
         if client_tools:
             kwargs["toolConfig"] = {"tools": client_tools}
 
-    metadata = {"model": body.get("model", "unknown"), "system_messages_folded": n_system}
+    metadata = {
+        "model": body.get("model", "unknown"),
+        "system_messages_folded": n_system,
+        "reasoning_blocks_stripped": n_reasoning,
+    }
     return kwargs, metadata
 
 
