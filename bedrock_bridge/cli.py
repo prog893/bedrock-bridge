@@ -320,13 +320,17 @@ def cmd_launch(args: argparse.Namespace) -> None:
         stderr=log_file,
     )
 
-    def cleanup(*_: object) -> None:
-        proxy.terminate()
-        try:
-            proxy.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proxy.kill()
+    def stop_proxy() -> None:
+        if proxy.poll() is None:
+            proxy.terminate()
+            try:
+                proxy.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proxy.kill()
         log_file.close()
+
+    def cleanup(*_: object) -> None:
+        stop_proxy()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, cleanup)
@@ -357,10 +361,16 @@ def cmd_launch(args: argparse.Namespace) -> None:
     print("OK")
     print()
 
-    if args.claude:
-        _run_claude(port, region, main_id, light_id, args.passthrough, args.print)
-    else:
-        _hold(port, main_id, region, proxy)
+    # Stop the proxy on every exit path. A normal `claude` exit ends in
+    # sys.exit; without this, a `--claude --print` run (no terminal, so no
+    # hangup signal to the process group) left the proxy running.
+    try:
+        if args.claude:
+            _run_claude(port, region, main_id, light_id, args.passthrough, args.print)
+        else:
+            _hold(port, main_id, region, proxy)
+    finally:
+        stop_proxy()
 
 
 def _run_claude(
