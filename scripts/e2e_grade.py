@@ -31,7 +31,17 @@ FIXTURES = REPO_ROOT / "tests" / "fixtures"
 IMAGE = FIXTURES / "sample_01.jpg"
 ANNOTATION = FIXTURES / "sample_01.annotation.md"
 
-BRIDGE = os.environ.get("BEDROCK_BRIDGE_BIN") or shutil.which("bedrock-bridge") or "bedrock-bridge"
+# Bridge under test: $BEDROCK_BRIDGE_BIN, else the one installed next to the
+# Python running this script (a dev venv with the checkout installed
+# editable, so the branch code is graded), else PATH. PATH alone usually
+# finds a released install (e.g. Homebrew) and grades that instead.
+_VENV_BRIDGE = Path(sys.executable).parent / "bedrock-bridge"
+BRIDGE = (
+    os.environ.get("BEDROCK_BRIDGE_BIN")
+    or (str(_VENV_BRIDGE) if _VENV_BRIDGE.exists() else None)
+    or shutil.which("bedrock-bridge")
+    or "bedrock-bridge"
+)
 CLAUDE = shutil.which("claude") or "claude"
 
 # Schema the judge must return. --json-schema forces Claude to emit exactly
@@ -163,7 +173,7 @@ def main() -> int:
         return 2
 
     via = f"{args.model} (vision={args.vision_model})" if args.vision_model else args.model
-    print(f"[1/2] describing {IMAGE.name} via bridge model {via} ...", file=sys.stderr)
+    print(f"[1/2] describing {IMAGE.name} via bridge model {via} ({BRIDGE}) ...", file=sys.stderr)
     description = describe_via_bridge(args.model, args.describe_timeout, args.vision_model)
     print(f"\n--- model description ---\n{description}\n", file=sys.stderr)
 
