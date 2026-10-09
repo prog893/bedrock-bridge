@@ -13,6 +13,10 @@ Dev-only tools. Not shipped with the installed package; run from a source checko
 ./.venv/bin/python scripts/probe_tool_use.py minimax.minimax-m2.5
 ```
 
+`e2e_grade.py` grades the `bedrock-bridge` installed next to the Python running it (the dev venv, so the
+checkout is under test), falling back to `PATH`; set `$BEDROCK_BRIDGE_BIN` to pick another. The run
+header prints which one it used.
+
 The `claude` judge used by `e2e_grade.py` must reach Claude by a path that does
 not go through this bridge (first-party Anthropic key or native
 `CLAUDE_CODE_USE_BEDROCK=1`).
