@@ -49,6 +49,7 @@ bedrock-bridge -m deepseek.v3.2 --vision-model qwen.qwen3-vl-235b-a22b --claude
 | Light (optional) | `BEDROCK_BRIDGE_MODEL_LIGHT` | `--model-light` |
 | Vision (optional) | `BEDROCK_BRIDGE_MODEL_VISION` | `--vision-model` |
 | Log verbosity | `BEDROCK_BRIDGE_LOG_LEVEL` | `--log-level` |
+| Strip prior-turn reasoning (opt-in) | `BEDROCK_BRIDGE_STRIP_REASONING_HISTORY=1` | `--strip-reasoning-history` |
 
 The light slot is for background tasks Claude Code dispatches to a smaller model. If no light model is configured, all requests route to the main model.
 
@@ -71,6 +72,10 @@ Pass any Bedrock foundation ID (`moonshotai.kimi-k2.5`) or inference-profile ID 
 | `debug` | Adds request and response content (prompt text, full request body and outgoing Converse kwargs; image bytes redacted). |
 
 `debug` writes prompt content to the log file, so it asks for interactive confirmation before starting and refuses to run on a non-TTY (there is no bypass flag). Use it to capture self-contained evidence for a bug report. See [docs/logging.md](./docs/logging.md).
+
+### Prior-turn reasoning
+
+By default the bridge sends earlier turns' reasoning back to the model, as Claude Code stores it. `--strip-reasoning-history` (or `$BEDROCK_BRIDGE_STRIP_REASONING_HISTORY=1`) drops the thinking blocks from every earlier assistant turn instead, including turns inside the current tool loop. It saves input tokens on long sessions, and Kimi K3's Bedrock model card asks for it on multi-turn Converse requests. Moonshot also documents K3 as trained to see its earlier reasoning, so the effect on answer quality depends on the model; the bridge does not measure it. Claude Code's context gauge follows the token counts Bedrock reports, so it reflects the smaller context.
 
 ### Resuming sessions
 

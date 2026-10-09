@@ -508,3 +508,56 @@ def test_effort_dropped_with_warning_for_converse_discarding_models(caplog: pyte
         "effort 'high' ignored for global.moonshotai.kimi-k3: the model discards reasoning_effort on Converse",
         "effort 'max' ignored for global.xai.grok-4.7: the model discards reasoning_effort on Converse",
     ]
+
+
+# --strip-reasoning-history (opt-in): thinking blocks are removed from every
+# assistant turn in the request, including turns inside the current tool loop
+# (Kimi K3's Bedrock card: "remove reasoning blocks from prior turns").
+def _tool_loop_body() -> dict:
+    return {
+        "model": "m",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "user", "content": "read the file"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "I should read it.", "signature": ""},
+                    {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/x"}},
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "data"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": "b3BhcXVl"},
+                    {"type": "thinking", "thinking": "Now summarize.", "signature": ""},
+                ],
+            },
+            {"role": "user", "content": "thanks"},
+        ],
+    }
+
+
+def _has_reasoning(kwargs: dict) -> bool:
+    return any("reasoningContent" in b for m in kwargs["messages"] for b in m["content"])
+
+
+def test_reasoning_history_kept_by_default() -> None:
+    kwargs, metadata = anthropic_to_converse(_tool_loop_body())
+    assert _has_reasoning(kwargs)
+    assert metadata["reasoning_blocks_stripped"] == 0
+
+
+def test_reasoning_history_stripped_from_every_assistant_turn() -> None:
+    kwargs, metadata = anthropic_to_converse(_tool_loop_body(), strip_reasoning_history=True)
+    assert not _has_reasoning(kwargs)
+    assert metadata["reasoning_blocks_stripped"] == 3
+    # Tool calls and user turns are untouched.
+    assert kwargs["messages"][1]["content"] == [
+        {"toolUse": {"toolUseId": "t1", "name": "Read", "input": {"file_path": "/x"}}}
+    ]
+    assert kwargs["messages"][2]["content"][0]["toolResult"]["toolUseId"] == "t1"
+    # A turn that held only reasoning keeps a non-blank placeholder so Bedrock
+    # accepts it.
+    assert kwargs["messages"][3]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}]

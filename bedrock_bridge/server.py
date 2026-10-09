@@ -44,6 +44,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("bedrock-bridge")
 logger.setLevel(_level)
 
+# Opt-in (--strip-reasoning-history, set by the CLI): drop prior-turn thinking
+# blocks before sending. Kimi K3's Bedrock model card asks for this on
+# Converse multi-turn requests; it also saves input tokens on long sessions.
+_STRIP_REASONING_HISTORY = os.environ.get("BEDROCK_BRIDGE_STRIP_REASONING_HISTORY", "") == "1"
+
 
 def _trace(msg: str | Callable[[], str]) -> None:
     """Log at TRACE (debug tier only). Carries request/response content.
@@ -692,10 +697,12 @@ async def messages(request: Request) -> Response:
             n = _strip_images_from_body(body)
             logger.debug(f"vision adapt: stripped {n} image block(s); no vision model set")
 
-    converse_kwargs, metadata = anthropic_to_converse(body, model_id)
+    converse_kwargs, metadata = anthropic_to_converse(body, model_id, _STRIP_REASONING_HISTORY)
     metadata["model"] = model_alias
     if n_sys := metadata.get("system_messages_folded"):
         logger.debug(f"folded {n_sys} system-role message(s) into user turns (Converse has no system role)")
+    if n_rs := metadata.get("reasoning_blocks_stripped"):
+        logger.debug(f"stripped {n_rs} prior-turn reasoning block(s) (--strip-reasoning-history)")
     _trace(lambda: f"converse_kwargs: {json.dumps(_scrub_bytes_only(converse_kwargs), default=str)}")
     client = get_client()
 

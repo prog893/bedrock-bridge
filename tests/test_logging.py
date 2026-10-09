@@ -175,3 +175,9 @@ def test_debug_consent_accepted(monkeypatch: pytest.MonkeyPatch, answer: str) ->
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _: answer)
     cli._confirm_debug_logging("/tmp/bedrock-bridge-1234.log")  # returns without raising
+
+
+def test_strip_reasoning_history_flag_defaults_off() -> None:
+    parser = cli._build_launch_parser("bedrock-bridge")
+    assert parser.parse_args(["-m", "x"]).strip_reasoning_history is False
+    assert parser.parse_args(["-m", "x", "--strip-reasoning-history"]).strip_reasoning_history is True
