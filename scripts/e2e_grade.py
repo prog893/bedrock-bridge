@@ -38,7 +38,7 @@ ANNOTATION = FIXTURES / "sample_01.annotation.md"
 _VENV_BRIDGE = Path(sys.executable).parent / "bedrock-bridge"
 BRIDGE = (
     os.environ.get("BEDROCK_BRIDGE_BIN")
-    or (str(_VENV_BRIDGE) if os.access(_VENV_BRIDGE, os.X_OK) else None)
+    or (str(_VENV_BRIDGE) if _VENV_BRIDGE.is_file() and os.access(_VENV_BRIDGE, os.X_OK) else None)
     or shutil.which("bedrock-bridge")
     or "bedrock-bridge"
 )
