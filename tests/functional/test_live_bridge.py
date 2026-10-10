@@ -55,8 +55,17 @@ def test_trailing_system_role_message_is_folded(bridge: BridgeClient) -> None:
 
 
 # An assistant turn that arrives as nothing but empty text blocks previously
-# produced a blank-text ValidationException (the v0.1.3 hotfix). It must now
-# round-trip via the "[empty]" placeholder.
+# produced a blank-text ValidationException (the v0.1.3 hotfix, 2026-06-06):
+# the bridge's empty-message fallbacks emitted {"text": ""}, and Bedrock
+# rejected it with "The text field in the ContentBlock ... is blank". Every
+# fallback now writes "[empty]" instead, and this turn must round-trip.
+#
+# Bedrock's rule has not been constant: on 2026-10-09 a single blank text
+# block in an assistant turn was accepted on Kimi K2.5, Kimi K3, GLM 5.3 and
+# MiniMax M2.5, while blank user text was still rejected. The bridge therefore
+# keeps empty *string* assistant content blank (translate._convert_message),
+# but block-form turns like this one still get the placeholder. If this test
+# starts failing, check whether blank assistant text is rejected again.
 def test_empty_assistant_turn_does_not_500(bridge: BridgeClient) -> None:
     status, body = bridge.messages(
         {

@@ -609,3 +609,23 @@ def test_reasoning_stripped_text_kept() -> None:
     }
     kwargs, _ = anthropic_to_converse(body, strip_reasoning_history=True)
     assert kwargs["messages"][1] == {"role": "assistant", "content": [{"text": "Hello!"}]}
+
+
+# String-form content that is empty used to pass through as a blank text block,
+# which Converse rejects in a user turn ("The text field in the ContentBlock ...
+# is blank"). A user turn gets the placeholder; blank assistant text was
+# accepted when measured (2026-10-09), so it is kept as is.
+def test_empty_string_content_uses_placeholder() -> None:
+    body = {
+        "model": "m",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "user", "content": ""},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "hi"},
+        ],
+    }
+    msgs = _converted_messages(body)
+    assert msgs[0]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert msgs[1]["content"] == [{"text": ""}]
+    assert msgs[2]["content"] == [{"text": "hi"}]

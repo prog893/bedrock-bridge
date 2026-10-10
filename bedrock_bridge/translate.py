@@ -351,7 +351,12 @@ def _convert_message(msg: dict) -> dict:
     content = msg.get("content", "")
 
     if isinstance(content, str):
-        return {"role": role, "content": [{"text": content}]}
+        # An empty string would reach Converse as a blank text block, which it
+        # rejects in user turns, so those get the placeholder. Blank assistant
+        # text was accepted when measured (2026-10-09) and is kept as is; see
+        # test_empty_assistant_turn_does_not_500 for the earlier rejection.
+        text = content if role == "assistant" else content or _EMPTY_TEXT_PLACEHOLDER
+        return {"role": role, "content": [{"text": text}]}
 
     blocks: list[dict] = []
     for block in content:
