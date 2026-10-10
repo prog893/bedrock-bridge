@@ -613,7 +613,8 @@ def test_reasoning_stripped_text_kept() -> None:
 
 # String-form content that is empty used to pass through as a blank text block,
 # which Converse rejects in a user turn ("The text field in the ContentBlock ...
-# is blank"). It gets the same placeholder as empty block content.
+# is blank"). A user turn gets the placeholder; blank assistant text was
+# accepted when measured (2026-10-09), so it is kept as is.
 def test_empty_string_content_uses_placeholder() -> None:
     body = {
         "model": "m",
@@ -626,5 +627,5 @@ def test_empty_string_content_uses_placeholder() -> None:
     }
     msgs = _converted_messages(body)
     assert msgs[0]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}]
-    assert msgs[1]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert msgs[1]["content"] == [{"text": ""}]
     assert msgs[2]["content"] == [{"text": "hi"}]
