@@ -73,6 +73,16 @@ def _restore_tool_use_id(short: str) -> str:
     return _short_to_id.get(short, short)
 
 
+# Tool-use IDs on the response leg are minted here instead of passed through.
+# Some models number calls per response (GLM 5.3 emits `call_0` for every call),
+# but Anthropic IDs are unique across the conversation and Claude Code depends
+# on it: with repeats, its history repair (ensureToolResultPairing) mangles
+# later calls and the model sees its tool calls vanish. Nothing maps back:
+# Claude Code sends the minted ID in both tool_use and tool_result next turn.
+def _new_tool_use_id() -> str:
+    return "toolu_bridge_" + _short_id()
+
+
 # Anthropic's Messages API accepts `{"role": "system", ...}` entries inside
 # `messages` (mid-conversation operator instructions). Claude Code 2.x sends its
 # "# Environment" block this way, as the final entry after the user turn.
@@ -485,7 +495,7 @@ def converse_to_anthropic(response: dict, metadata: dict) -> dict:
             content.append(
                 {
                     "type": "tool_use",
-                    "id": _restore_tool_use_id(tu["toolUseId"]),
+                    "id": _new_tool_use_id(),
                     "name": _restore_tool_name(tu["name"]),
                     "input": tu["input"],
                 }
@@ -588,7 +598,7 @@ def converse_stream_to_anthropic_events(
                     "index": idx,
                     "content_block": {
                         "type": "tool_use",
-                        "id": _restore_tool_use_id(tu.get("toolUseId", "")),
+                        "id": _new_tool_use_id(),
                         "name": _restore_tool_name(tu.get("name", "")),
                         "input": {},
                     },
@@ -623,7 +633,7 @@ def converse_stream_to_anthropic_events(
                     {
                         "type": "content_block_start",
                         "index": idx,
-                        "content_block": {"type": "tool_use", "id": "", "name": "", "input": {}},
+                        "content_block": {"type": "tool_use", "id": _new_tool_use_id(), "name": "", "input": {}},
                     },
                 )
             else:
