@@ -46,6 +46,23 @@ failing request once at `debug`, then attach the relevant slice of
 `/tmp/bedrock-bridge-<port>.log`. Review it for sensitive content before
 sharing.
 
+## Claude Code's side of the conversation
+
+The bridge log shows what reached the bridge. For what Claude Code decided on
+its side (permission checks, auto-mode classifier state, which provider it
+dispatched to), pass Claude Code's own `--debug-file` after `--claude`:
+
+```bash
+bedrock-bridge -m global.zai.glm-5.3 --claude --debug-file /tmp/claude-debug.txt
+```
+
+Comparing that file against a native `CLAUDE_CODE_USE_BEDROCK=1` run of the
+same prompt is a quick way to see where the bridged path diverges. This is how
+the auto-mode issue in [architecture.md](./architecture.md#auto-mode) was
+traced: the bridged run logged `[server-classifier] no usable verdict` on every
+gated call. The file contains prompt metadata and tool inputs; review it before
+sharing.
+
 ## Note on errors
 
 AWS error strings can quote parts of a request and are logged at `ERROR`, which

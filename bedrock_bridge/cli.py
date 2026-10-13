@@ -386,9 +386,10 @@ def _run_claude(
         "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}",
         "ANTHROPIC_API_KEY": "bedrock-bridge",
         # ANTHROPIC_MODEL fills Claude Code's primary slot; ANTHROPIC_DEFAULT_HAIKU_MODEL
-        # fills the light slot used by background tasks (auto-mode classifier,
-        # session title generation, summarization). The bridge routes both back to
-        # the configured Bedrock IDs by exact-string match in server._route.
+        # fills the light slot used by background tasks (session title generation,
+        # summarization). The bridge routes both back to the configured Bedrock IDs
+        # by exact-string match in server._route. The auto-mode classifier asks for
+        # its own Anthropic model name, which falls through to the main model.
         "ANTHROPIC_MODEL": main_id,
         # Claude Code treats our proxy as the Anthropic API (since we set
         # ANTHROPIC_BASE_URL), so the "Claude API" defaults apply: telemetry,
@@ -398,6 +399,14 @@ def _run_claude(
         # Local state (session transcripts, /cost, auto-memory) is unaffected.
         # Users can override by exporting CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=0.
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": os.environ.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
+        # Claude Code's auto mode first asks the server for a safety verdict
+        # (a beta header; the verdict would arrive inside the response) and moves
+        # to its local classifier only if the server rejects that with HTTP 400.
+        # The bridge accepts the request and Bedrock sends no verdict, so every
+        # gated tool call stalls and the turn stops after 10. This skips the
+        # server attempt: the local classifier sends ordinary requests that the
+        # bridge serves on Bedrock. Users can override with =1.
+        "CLAUDE_CODE_AUTO_MODE_SERVER": os.environ.get("CLAUDE_CODE_AUTO_MODE_SERVER", "0"),
     }
     if light_id:
         claude_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = light_id
@@ -431,6 +440,7 @@ def _hold(port: int, main_id: str, region: str | None, proxy: subprocess.Popen) 
     print()
     print(f"    export ANTHROPIC_BASE_URL=http://127.0.0.1:{port}")
     print("    export ANTHROPIC_API_KEY=bedrock-bridge")
+    print("    export CLAUDE_CODE_AUTO_MODE_SERVER=0  # Claude Code auto mode")
     print()
     print(f"  Tell the client to request model id: {main_id}")
     if region:
