@@ -11,7 +11,7 @@ def _spawned_env(monkeypatch: pytest.MonkeyPatch) -> dict:
     class _Done:
         returncode = 0
 
-    def fake_run(args, env):
+    def fake_run(args: list[str], env: dict[str, str]) -> _Done:
         captured.update(env)
         return _Done()
 

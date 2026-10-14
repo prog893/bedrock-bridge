@@ -327,7 +327,12 @@ def _streamed_tool_use_id(start_event: dict) -> str:
 
 
 def test_stream_repeated_tool_use_ids_get_unique_ids() -> None:
-    start = {"contentBlockStart": {"start": {"toolUse": {"toolUseId": "call_0", "name": "Bash"}}, "contentBlockIndex": 0}}
+    start = {
+        "contentBlockStart": {
+            "start": {"toolUse": {"toolUseId": "call_0", "name": "Bash"}},
+            "contentBlockIndex": 0,
+        }
+    }
     ids = {_streamed_tool_use_id(start) for _ in range(3)}
     assert len(ids) == 3
     assert all(i.startswith("toolu_") for i in ids)
