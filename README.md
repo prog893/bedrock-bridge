@@ -55,7 +55,7 @@ The light slot is for background tasks Claude Code dispatches to a smaller model
 
 The vision slot lets a text-only main model work with images. When set, the bridge inspects each attached image with this image-capable model and feeds the result back through a `describe_image` tool the main model can call (see [Images](#images)). If the main model is itself image-capable, setting `--vision-model` routes images to the vision model anyway and treats main as text-only.
 
-Claude Code's auto-mode safety classifier works through the bridge. With a light slot configured it runs there; without one it falls through to the main model.
+Claude Code's auto mode works through the bridge with its local safety classifier, which runs on the main model. Under `--claude` the bridge sets `CLAUDE_CODE_AUTO_MODE_SERVER=0` on the spawned process to select it. Without that variable, Claude Code first asks the server for a classifier verdict, which Bedrock does not provide: every Bash or WebFetch call fails with "The server-side auto mode classifier gave no verdict", and the turn stops after 10 such responses. If you wire Claude Code to the bridge yourself (no `--claude`), export `CLAUDE_CODE_AUTO_MODE_SERVER=0` too. See [docs/architecture.md](./docs/architecture.md#auto-mode).
 
 Pass any Bedrock foundation ID (`moonshotai.kimi-k2.5`) or inference-profile ID (`us.meta.llama4-...`) directly. CLI flags override env vars.
 

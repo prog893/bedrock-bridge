@@ -314,6 +314,44 @@ def test_stream_tool_use_stop_reason_survives_metadata() -> None:
     assert [d["delta"]["stop_reason"] for d in deltas] == ["tool_use", "tool_use"]
 
 
+# glm-5.3 names every tool call `call_0`, turn after turn. Passed through, the
+# repeats made Claude Code's history repair mangle later calls, and the model
+# saw its own tool calls vanish. Each response-side tool_use needs a unique id.
+def _streamed_tool_use_id(start_event: dict) -> str:
+    events = [{"messageStart": {"role": "assistant"}}, start_event]
+    for ev in events:
+        for etype, data in converse_stream_to_anthropic_events(ev, {"model": "m"}, {}):
+            if etype == "content_block_start":
+                return data["content_block"]["id"]
+    raise AssertionError("no content_block_start")
+
+
+def test_stream_repeated_tool_use_ids_get_unique_ids() -> None:
+    start = {
+        "contentBlockStart": {
+            "start": {"toolUse": {"toolUseId": "call_0", "name": "Bash"}},
+            "contentBlockIndex": 0,
+        }
+    }
+    ids = {_streamed_tool_use_id(start) for _ in range(3)}
+    assert len(ids) == 3
+    assert all(i.startswith("toolu_") for i in ids)
+
+
+# Without a typed contentBlockStart, the synthesized tool_use start used to
+# carry an empty id.
+def test_stream_tool_use_without_start_gets_an_id() -> None:
+    delta = {"contentBlockDelta": {"delta": {"toolUse": {"input": "{}"}}, "contentBlockIndex": 0}}
+    assert _streamed_tool_use_id(delta)
+
+
+def test_buffered_repeated_tool_use_ids_get_unique_ids() -> None:
+    tool_use = {"toolUse": {"toolUseId": "call_0", "name": "Bash", "input": {}}}
+    response = {"output": {"message": {"content": [tool_use, tool_use]}}, "stopReason": "tool_use"}
+    content = translate.converse_to_anthropic(response, {"model": "m"})["content"]
+    assert content[0]["id"] != content[1]["id"]
+
+
 # Claude Code sends its "# Environment" block as a `role: "system"` entry at the
 # end of `messages` (the Anthropic API's mid-conversation system message).
 # Converse has no system role: Bedrock rejects the final-entry case with

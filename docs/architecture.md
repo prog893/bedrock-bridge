@@ -46,7 +46,7 @@ A single Anthropic-API request flows like this:
 When the CLI launches Claude Code under `--claude`, it sets two env vars on the spawned process:
 
 - `ANTHROPIC_MODEL=<main_id>` fills the primary slot.
-- `ANTHROPIC_DEFAULT_HAIKU_MODEL=<light_id>` fills the light slot used by Claude Code's background tasks (auto-mode safety classifier, session title generation, summarization). Only set if a light model is configured.
+- `ANTHROPIC_DEFAULT_HAIKU_MODEL=<light_id>` fills the light slot used by Claude Code's background tasks (session title generation, summarization). Only set if a light model is configured. The auto-mode classifier requests its own Anthropic model name, so it routes to the main model (see [Auto mode](#auto-mode)).
 
 Claude Code emits those exact strings in outgoing `model` fields. The proxy keys on exact match:
 
@@ -189,6 +189,17 @@ The umbrella variable is documented as equivalent to setting `DISABLE_AUTOUPDATE
 If a user already exports `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` themselves, the bridge respects it (including a `0` override that re-enables traffic). The bridge does not touch `DO_NOT_TRACK` or other related variables.
 
 The WebFetch domain safety check is not affected by the umbrella variable. Disabling it requires a `skipWebFetchPreflight: true` entry in the user's settings file, which the bridge does not modify.
+
+## Auto mode
+
+Claude Code's auto mode gates tool calls (Bash, WebFetch, and others) behind a safety classifier. Claude Code has two classifier paths:
+
+- **Server-side.** Claude Code adds a beta header asking the server for a verdict, which would arrive inside the model response. It moves to the local path only if the server rejects that request with HTTP 400. The bridge accepts it, and Bedrock produces no verdict, so each gated call fails with "The server-side auto mode classifier gave no verdict", and after 10 responses in a row without one the turn stops.
+- **Local.** Claude Code sends its own classifier requests (non-streaming, no tools) and parses the verdict from the reply. The bridge serves these like any other request, on Bedrock.
+
+Under `--claude`, the bridge sets `CLAUDE_CODE_AUTO_MODE_SERVER=0` on the spawned process, which selects the local path. The safety check still runs on every gated call; it runs on the configured Bedrock model instead of Anthropic's server. A user-exported value is respected, as with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. Clients wired by hand (no `--claude`) need the same export; the bridge prints it alongside `ANTHROPIC_BASE_URL` when it runs without `--claude`.
+
+The local classifier requests a fixed Anthropic model name, which matches neither slot, so it routes to the main model. Measured on Claude Code 2.1.293.
 
 ## CloudTrail attribution
 
