@@ -448,7 +448,8 @@ def _hold(port: int, main_id: str, region: str | None, proxy: subprocess.Popen) 
     print("    export ANTHROPIC_API_KEY=bedrock-bridge")
     print("    export CLAUDE_CODE_AUTO_MODE_SERVER=0  # Claude Code auto mode")
     if window := context_window(main_id):
-        print(f"    export CLAUDE_CODE_MAX_CONTEXT_TOKENS={window}  # Claude Code context window")
+        # ${VAR-default} keeps a value already exported in the shell this is pasted into.
+        print(f'    export CLAUDE_CODE_MAX_CONTEXT_TOKENS="${{CLAUDE_CODE_MAX_CONTEXT_TOKENS-{window}}}"  # Claude Code context window')
     print()
     print(f"  Tell the client to request model id: {main_id}")
     if region:
