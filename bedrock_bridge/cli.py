@@ -24,6 +24,7 @@ from botocore.exceptions import (
 )
 
 from . import __version__
+from .context_windows import context_window
 
 LOGO = r"""
   ┌─────────────────────────────────┐
@@ -408,6 +409,11 @@ def _run_claude(
         # bridge serves on Bedrock. Users can override with =1.
         "CLAUDE_CODE_AUTO_MODE_SERVER": os.environ.get("CLAUDE_CODE_AUTO_MODE_SERVER", "0"),
     }
+    # Claude Code assumes 200K for model IDs it does not know; give it the main
+    # model's documented window so it compacts at the real limit. Unlisted
+    # models keep the 200K default. A user-exported value is respected.
+    if (window := context_window(main_id)) and "CLAUDE_CODE_MAX_CONTEXT_TOKENS" not in os.environ:
+        claude_env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(window)
     if light_id:
         claude_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = light_id
     if region:
@@ -441,6 +447,8 @@ def _hold(port: int, main_id: str, region: str | None, proxy: subprocess.Popen) 
     print(f"    export ANTHROPIC_BASE_URL=http://127.0.0.1:{port}")
     print("    export ANTHROPIC_API_KEY=bedrock-bridge")
     print("    export CLAUDE_CODE_AUTO_MODE_SERVER=0  # Claude Code auto mode")
+    if window := context_window(main_id):
+        print(f"    export CLAUDE_CODE_MAX_CONTEXT_TOKENS={window}  # Claude Code context window")
     print()
     print(f"  Tell the client to request model id: {main_id}")
     if region:
