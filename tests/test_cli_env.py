@@ -1,26 +1,37 @@
 """Tests for the env the CLI sets on the spawned `claude` process under --claude."""
 
+import json
+
 import pytest
 
 from bedrock_bridge import cli
 
 
-def _spawned_env(
-    monkeypatch: pytest.MonkeyPatch, main_id: str = "minimax.minimax-m2.5", light_id: str | None = None
-) -> dict:
+def _spawn(
+    monkeypatch: pytest.MonkeyPatch,
+    main_id: str = "minimax.minimax-m2.5",
+    light_id: str | None = None,
+    passthrough: list[str] | None = None,
+) -> tuple[list[str], dict]:
     captured: dict = {}
 
     class _Done:
         returncode = 0
 
     def fake_run(args: list[str], env: dict[str, str]) -> _Done:
-        captured.update(env)
+        captured.update(args=args, env=env)
         return _Done()
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     with pytest.raises(SystemExit):
-        cli._run_claude(8080, None, main_id, light_id, [], None)
-    return captured
+        cli._run_claude(8080, None, main_id, light_id, passthrough or [], None)
+    return captured["args"], captured["env"]
+
+
+def _spawned_env(
+    monkeypatch: pytest.MonkeyPatch, main_id: str = "minimax.minimax-m2.5", light_id: str | None = None
+) -> dict:
+    return _spawn(monkeypatch, main_id, light_id)[1]
 
 
 # Auto mode: without this, Claude Code waits for a server-side verdict that
@@ -78,3 +89,30 @@ def test_light_slot_uses_light_model(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_inherited_model_slots_removed(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
     monkeypatch.setenv(key, "global.anthropic.claude-opus-5-5")
     assert key not in _spawned_env(monkeypatch)
+
+
+# A settings-file `env` block overrides the process env (measured on Claude
+# Code 2.1.293 for user, project and local settings), so the same values go in
+# through --settings, which outranks those files.
+def test_settings_flag_pins_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    args, _ = _spawn(monkeypatch, light_id="moonshotai.kimi-k2.5")
+    assert args[1] == "--settings"
+    assert json.loads(args[2])["env"] == {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
+        "ANTHROPIC_API_KEY": "bedrock-bridge",
+        "ANTHROPIC_MODEL": "minimax.minimax-m2.5",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "moonshotai.kimi-k2.5",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "",
+        "ANTHROPIC_SMALL_FAST_MODEL": "",
+        "CLAUDE_CODE_USE_BEDROCK": "",
+        "CLAUDE_CODE_USE_MANTLE": "",
+        "CLAUDE_CODE_USE_VERTEX": "",
+        "CLAUDE_CODE_USE_FOUNDRY": "",
+    }
+
+
+def test_user_claude_args_follow_settings_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    args, _ = _spawn(monkeypatch, passthrough=["--settings", "mine.json"])
+    assert args[-2:] == ["--settings", "mine.json"]
+    assert args.index("--settings") == 1

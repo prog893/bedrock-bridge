@@ -48,7 +48,7 @@ When the CLI launches Claude Code under `--claude`, it sets two env vars on the 
 - `ANTHROPIC_MODEL=<main_id>` fills the primary slot.
 - `ANTHROPIC_DEFAULT_HAIKU_MODEL=<light_id>` fills the light slot used by Claude Code's background tasks (session title generation, summarization). Without a light model it is set to `<main_id>`, replacing any value the user exported. The auto-mode classifier requests its own Anthropic model name, so it routes to the main model (see [Auto mode](#auto-mode)).
 
-It also removes `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL`, which a native Bedrock setup exports with Anthropic IDs. Claude Code then requests its built-in names for those slots, and they route to the main model.
+It also removes `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL`, which a native Bedrock setup exports with Anthropic IDs. Claude Code then requests its built-in names for those slots, and they route to the main model. Because an `env` block in a Claude Code settings file overrides the process environment, the CLI passes the same values, with those removed variables and `CLAUDE_CODE_USE_*` set to `""`, as `--settings` before the user's arguments ([ADR 0011](./adr/0011-pin-routing-with-settings-flag.md)). A `--settings` the user passes after `--claude` replaces it.
 
 Claude Code emits those exact strings in outgoing `model` fields. The proxy keys on exact match:
 

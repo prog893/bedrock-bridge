@@ -419,7 +419,7 @@ def _run_claude(
         claude_env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(window)
     if region:
         claude_env["AWS_REGION"] = region
-    for key in (
+    unset = (
         # Other model slots a native-Bedrock setup exports with Anthropic IDs.
         # Unset, Claude Code uses its built-in names, which route to main.
         "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -429,10 +429,17 @@ def _run_claude(
         "CLAUDE_CODE_USE_MANTLE",
         "CLAUDE_CODE_USE_VERTEX",
         "CLAUDE_CODE_USE_FOUNDRY",
-    ):
+    )
+    for key in unset:
         claude_env.pop(key, None)
+    # An `env` block in any Claude Code settings file overrides the process
+    # environment, so a native-Bedrock settings.json would send the session
+    # around the bridge. --settings outranks user, project and local settings;
+    # "" counts as unset. A --settings the user passes later replaces this one.
+    pinned = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL")
+    settings_env = {key: claude_env[key] for key in pinned} | dict.fromkeys(unset, "")
 
-    claude_args = ["claude"]
+    claude_args = ["claude", "--settings", json.dumps({"env": settings_env})]
     if print_arg:
         claude_args += ["--print", print_arg]
     if passthrough:
