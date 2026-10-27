@@ -16,6 +16,7 @@ changes gets a new record that supersedes the old one.
 | [0008](./0008-no-silent-truncation.md) | No silent truncation of tool results | Accepted |
 | [0009](./0009-implicit-caching-only.md) | Implicit prompt caching only by default | Accepted; opt-in explicit caching in #22 |
 | [0010](./0010-distribution.md) | Homebrew from git tags; no PyPI, no bottles | Accepted |
+| [0011](./0011-pin-routing-with-settings-flag.md) | Pin routing with `--settings` under `--claude` | Accepted |
 
 ## Template
 

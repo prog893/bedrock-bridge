@@ -64,6 +64,11 @@ tests/                offline tests, functional/ (real Bedrock), manual/ probes
   - `CLAUDE_CODE_MAX_CONTEXT_TOKENS`: the main model's window from
     `context_windows.py`; Claude Code otherwise assumes 200K for every bridged
     model ([ADR 0004](./docs/adr/0004-sourced-per-model-tables.md)).
+- Under `--claude` the routing values (base URL, API key, main and light model
+  IDs) also go to `claude` as `--settings` `env`, ahead of the user's
+  arguments, so settings files cannot override them; other provider and
+  model-slot variables are set to `""`
+  ([ADR 0011](./docs/adr/0011-pin-routing-with-settings-flag.md)).
 - `--claude` is a hard argv boundary: every token after it goes to `claude`
   verbatim, so bridge flags such as `--log-level` must come before it.
 - Log tiers: default, verbose, debug. The debug tier writes prompt content
