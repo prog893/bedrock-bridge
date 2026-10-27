@@ -122,6 +122,8 @@ def test_user_settings_flag_wins_with_warning(
     assert "replaces the bridge's" in capsys.readouterr().err
 
 
-def test_no_warning_without_user_settings_flag(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_no_warning_without_user_settings_flag(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _spawn(monkeypatch, passthrough=["--model", "haiku"])
     assert "replaces the bridge's" not in capsys.readouterr().err
