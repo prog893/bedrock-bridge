@@ -135,8 +135,12 @@ Three layers, described in [CONTRIBUTING.md](./CONTRIBUTING.md#tests):
   path so the file name gives no hint) and `claude -p` grades it against
   `sample_01.annotation.md`. The judge must not route through the bridge.
 
-The pre-commit hook (`git config core.hooksPath scripts/git-hooks`) runs the
-offline and functional layers.
+CI (`.github/workflows/`) runs the offline layer, `ruff check` and
+`ruff format --check` on every pull request. The pre-commit hook
+(`git config core.hooksPath scripts/git-hooks`) runs `ruff check --fix` and
+`ruff format` on the staged files and stops the commit when either changed
+anything. The functional layer and the grader run by hand, per the PR
+template.
 
 ## Dev probes
 
