@@ -389,9 +389,12 @@ def _run_claude(
         # ANTHROPIC_MODEL fills Claude Code's primary slot; ANTHROPIC_DEFAULT_HAIKU_MODEL
         # fills the light slot used by background tasks (session title generation,
         # summarization). The bridge routes both back to the configured Bedrock IDs
-        # by exact-string match in server._route. The auto-mode classifier asks for
+        # by exact-string match in server._route. Without a light model the light
+        # slot gets the main ID, so an Anthropic ID the user exported for native
+        # Bedrock does not reach the bridge. The auto-mode classifier asks for
         # its own Anthropic model name, which falls through to the main model.
         "ANTHROPIC_MODEL": main_id,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": light_id or main_id,
         # Claude Code treats our proxy as the Anthropic API (since we set
         # ANTHROPIC_BASE_URL), so the "Claude API" defaults apply: telemetry,
         # Sentry, /feedback, autoupdater, and surveys are all on by default.
@@ -414,11 +417,14 @@ def _run_claude(
     # models keep the 200K default. A user-exported value is respected.
     if (window := context_window(main_id)) and "CLAUDE_CODE_MAX_CONTEXT_TOKENS" not in os.environ:
         claude_env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(window)
-    if light_id:
-        claude_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = light_id
     if region:
         claude_env["AWS_REGION"] = region
     for key in (
+        # Other model slots a native-Bedrock setup exports with Anthropic IDs.
+        # Unset, Claude Code uses its built-in names, which route to main.
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
         "CLAUDE_CODE_USE_BEDROCK",
         "CLAUDE_CODE_USE_MANTLE",
         "CLAUDE_CODE_USE_VERTEX",

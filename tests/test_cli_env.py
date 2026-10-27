@@ -5,7 +5,9 @@ import pytest
 from bedrock_bridge import cli
 
 
-def _spawned_env(monkeypatch: pytest.MonkeyPatch, main_id: str = "minimax.minimax-m2.5") -> dict:
+def _spawned_env(
+    monkeypatch: pytest.MonkeyPatch, main_id: str = "minimax.minimax-m2.5", light_id: str | None = None
+) -> dict:
     captured: dict = {}
 
     class _Done:
@@ -17,7 +19,7 @@ def _spawned_env(monkeypatch: pytest.MonkeyPatch, main_id: str = "minimax.minima
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     with pytest.raises(SystemExit):
-        cli._run_claude(8080, None, main_id, None, [], None)
+        cli._run_claude(8080, None, main_id, light_id, [], None)
     return captured
 
 
@@ -54,3 +56,25 @@ def test_context_window_unlisted_model_not_set(monkeypatch: pytest.MonkeyPatch) 
 def test_context_window_user_override_respected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "300000")
     assert _spawned_env(monkeypatch, "global.zai.glm-5.3")["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "300000"
+
+
+# Model slots: a user who also runs Claude Code natively on Bedrock exports
+# Anthropic IDs for these. Inherited, they put an Anthropic name on the light
+# slot (#27) and on /model opus or sonnet.
+def test_light_slot_uses_main_without_light_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "global.anthropic.claude-haiku-5-5")
+    assert _spawned_env(monkeypatch)["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "minimax.minimax-m2.5"
+
+
+def test_light_slot_uses_light_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "global.anthropic.claude-haiku-5-5")
+    env = _spawned_env(monkeypatch, light_id="moonshotai.kimi-k2.5")
+    assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "moonshotai.kimi-k2.5"
+
+
+@pytest.mark.parametrize(
+    "key", ["ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"]
+)
+def test_inherited_model_slots_removed(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    monkeypatch.setenv(key, "global.anthropic.claude-opus-5-5")
+    assert key not in _spawned_env(monkeypatch)
