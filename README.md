@@ -141,6 +141,8 @@ In both cases the bridge forwards the turn rather than rejecting it: a rejection
 - [docs/architecture.md](./docs/architecture.md): request flow, translation, preflight, routing.
 - [docs/iam.md](./docs/iam.md): minimum policy template.
 - [docs/compatibility.md](./docs/compatibility.md): end-to-end matrix across providers.
+- [docs/adr/](./docs/adr/): design decisions and why they were made.
+- [docs/releasing.md](./docs/releasing.md): how releases are cut.
 
 ## Development
 

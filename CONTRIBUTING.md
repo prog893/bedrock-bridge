@@ -47,4 +47,38 @@ Fill in the test-plan checklist in the PR template: run the offline and
 functional suites and the e2e grader against your diff, and record the models
 and scores. Don't check boxes you didn't run.
 
+PRs are merged (squash, branch deleted) once the CodeRabbit review approves the
+head commit. Fix valid findings that are in scope; for the rest, reply on the
+thread with the reason and open an issue if the work is worth tracking.
+CodeRabbit's free tier rate-limits reviews; re-request with
+`@coderabbitai review` after the window passes. No `Co-authored-by` trailers.
+
+Releases are cut by the maintainer on request; see
+[docs/releasing.md](./docs/releasing.md).
+
+## Where things go
+
+- Bugs and deferred work: GitHub issues, with the measurements that support
+  them.
+- Fixes: PRs that reference their issue.
+- Design decisions and their reasons: an ADR in [docs/adr/](./docs/adr/).
+- How the bridge works today: the docs in [docs/](./docs/). Docs describe the
+  current behavior; comparisons with an API the bridge does not use belong in
+  the PR that adds that API.
+- No journals, session logs or todo lists in the repo.
+
+Nothing private goes into the repo, issues or PRs: no hostnames, IP
+addresses, usernames, home-directory paths, AWS account IDs, IAM principals,
+or session content. Describe Claude Code behavior from its public docs or from
+observed traffic.
+
+## Writing style
+
+Applies to code comments, docs, commit messages, issues and PRs.
+
+- No em dashes or en dashes. Use a period, semicolon, comma, colon or
+  parentheses.
+- No "X, not Y" constructions. State the point directly.
+- No marketing language.
+
 `scripts/` also contains dev-only probes; see [scripts/README.md](./scripts/README.md).
