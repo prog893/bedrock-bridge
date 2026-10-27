@@ -67,6 +67,29 @@ def test_output_token_cap_passthrough() -> None:
     assert "prompt is too long" not in msg
 
 
+# A field the model rejects, on a model the bridge does not drop it for yet,
+# is a 400 with the raw message. As a 500, Claude Code retried it 10 times (#24).
+# Verbatim from Kimi K3 (2026-10-28).
+def test_unsupported_field_maps_to_400() -> None:
+    err = (
+        "An error occurred (ValidationException) when calling the Converse "
+        "operation: This model doesn't support the temperature field. Remove "
+        "temperature and try again."
+    )
+    status, etype, msg = _format_error(err, None)
+    assert status == 400
+    assert etype == "invalid_request_error"
+    assert "[bedrock-bridge]" in msg and "temperature field" in msg
+
+
+# Kimi K3's image rejection uses similar wording but is not an inferenceConfig
+# field; it stays unclassified. Verbatim from a direct probe (2026-10-28).
+def test_image_field_rejection_not_mapped_as_unsupported_field() -> None:
+    err = "This model doesn't support the image field for user messages. Remove image and try again."
+    status, _, _ = _format_error(err, None)
+    assert status == 500
+
+
 # Unknown errors fall through to 500 + bridge prefix + issue-tracker pointer.
 def test_unknown_error_falls_through_to_500() -> None:
     status, etype, msg = _format_error("some brand new bedrock error", None)

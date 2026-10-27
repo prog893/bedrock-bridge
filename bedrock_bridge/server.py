@@ -584,6 +584,21 @@ def _format_error(err: str, body: dict | None) -> tuple[int, str, str]:
             ),
         )
 
+    # A request field the model rejects, on a model not yet in
+    # translate._UNSUPPORTED_INFERENCE_FIELDS. The request cannot succeed
+    # unchanged, so it is an invalid request; as a 500, Claude Code retried it
+    # 10 times (#24).
+    if re.search(r"doesn't support the (\w+) field\. Remove \1 and try again", err):
+        return (
+            400,
+            "invalid_request_error",
+            (
+                f"[bedrock-bridge] {err} The bridge does not drop this field for "
+                f"this model yet; report the model ID: "
+                f"https://github.com/prog893/bedrock-bridge/issues"
+            ),
+        )
+
     # Per-image size cap -> Claude Code's per-image strip-and-retry path.
     if "image exceeds" in err and "maximum" in err:
         return 413, "invalid_request_error", f"[bedrock-bridge] {err}"

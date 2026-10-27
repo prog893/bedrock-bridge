@@ -56,6 +56,24 @@ Observed:
 | `amazon.nova-pro-v1:0` (via `apac.` profile) | 2026-06-04 | `The maximum tokens you requested exceeds the model limit of 10000. Try again with a maximum tokens value that is lower than 10000.` |
 | `amazon.nova-lite-v1:0` | 2026-06-04 | `The maximum tokens you requested exceeds the model limit of 10000. Try again with a maximum tokens value that is lower than 10000.` |
 
+## Request field the model rejects
+
+**Match:** message matches `doesn't support the <field> field. Remove <field> and try again`
+(the same field name twice; `the image field for user messages` does not match).
+**Rewrite:** `400` + verbatim + a request to report the model ID.
+**Effect:** the request cannot succeed unchanged, so it is reported as an
+invalid request. As an unclassified 500, Claude Code retried it 10 times (#24). Fields already known
+to be rejected are dropped before the request is sent
+(`translate._UNSUPPORTED_INFERENCE_FIELDS`), so this catches models not yet in
+that table.
+
+Observed:
+
+| Model | Date | Verbatim message |
+|-------|------|------------------|
+| `global.moonshotai.kimi-k3`, `global.openai.gpt-5.5`, `global.openai.gpt-6-astra` | 2026-10-28 | `This model doesn't support the temperature field. Remove temperature and try again.` |
+| same | 2026-10-28 | `This model doesn't support the topP field. Remove topP and try again.` |
+
 ## Per-image size cap reached
 
 **Match:** message contains `image exceeds` and `maximum`.

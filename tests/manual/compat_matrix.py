@@ -7,6 +7,8 @@ For each model, probe four capabilities we care about in Claude Code:
   2. tool_use     : emits a structured toolUse block
   3. image_tr     : accepts an image inside toolResult.content
   4. stream       : ConverseStream works
+  5. temperature  : accepts inferenceConfig.temperature
+  6. top_p        : accepts inferenceConfig.topP
 
 Writes a markdown table to stdout so the README can embed it.
 """
@@ -30,6 +32,8 @@ MODELS_TO_TEST = [
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "moonshotai.kimi-k2.5",
     "moonshot.kimi-k2-thinking",
+    "global.moonshotai.kimi-k3",
+    "global.zai.glm-5.3",
     "minimax.minimax-m2.5",
     "deepseek.v3.2",
     "qwen.qwen3-235b-a22b-2507-v1:0",
@@ -40,6 +44,9 @@ MODELS_TO_TEST = [
     "meta.llama4-maverick-17b-instruct-v1:0",
     "meta.llama4-scout-17b-instruct-v1:0",
     "mistral.mistral-large-3-675b-instruct",
+    "openai.gpt-oss-120b-1:0",
+    "global.openai.gpt-5.5",
+    "global.openai.gpt-6-astra",
 ]
 
 
@@ -92,7 +99,7 @@ def probe_tool_use(client: Any, model_id: str) -> bool:
         modelId=model_id,
         messages=[{"role": "user", "content": [{"text": "What's the weather in Tokyo? Use the tool."}]}],
         toolConfig={"tools": [WEATHER_TOOL]},
-        inferenceConfig={"maxTokens": 200, "temperature": 0.0},
+        inferenceConfig={"maxTokens": 200},
     )
     return any("toolUse" in b for b in r["output"]["message"]["content"])
 
@@ -136,11 +143,30 @@ def probe_stream(client: Any, model_id: str) -> bool:
     return True
 
 
+def _probe_inference_field(client: Any, model_id: str, field: str, value: float) -> bool:
+    client.converse(
+        modelId=model_id,
+        messages=[{"role": "user", "content": [{"text": "say hi"}]}],
+        inferenceConfig={"maxTokens": 10, field: value},
+    )
+    return True  # if no exception raised, accepted
+
+
+def probe_temperature(client: Any, model_id: str) -> bool:
+    return _probe_inference_field(client, model_id, "temperature", 0.5)
+
+
+def probe_top_p(client: Any, model_id: str) -> bool:
+    return _probe_inference_field(client, model_id, "topP", 0.9)
+
+
 TESTS: list[tuple[str, Callable]] = [
     ("text", probe_text),
     ("tool_use", probe_tool_use),
     ("image_tr", probe_image_in_tool_result),
     ("stream", probe_stream),
+    ("temperature", probe_temperature),
+    ("top_p", probe_top_p),
 ]
 
 
@@ -168,8 +194,8 @@ def main() -> None:
     models = [m for m in MODELS_TO_TEST if not args.only or any(o in m for o in args.only)]
 
     width = max(len(m) for m in models) + 2
-    hdr = f"| {'modelId':<{width}} | text | tool_use | image_tr | stream | notes |"
-    sep = f"|{'-' * (width + 2)}|------|----------|----------|--------|-------|"
+    hdr = f"| {'modelId':<{width}} | text | tool_use | image_tr | stream | temperature | top_p | notes |"
+    sep = f"|{'-' * (width + 2)}|------|----------|----------|--------|-------------|-------|-------|"
     print(hdr)
     print(sep)
 
@@ -186,7 +212,7 @@ def main() -> None:
         note_col = notes[0] if notes else ""
         print(
             f"| `{m:<{width - 2}}` | {r['text']:<4} | {r['tool_use']:<8} | "
-            f"{r['image_tr']:<8} | {r['stream']:<6} | {note_col[:80]} |"
+            f"{r['image_tr']:<8} | {r['stream']:<6} | {r['temperature']:<11} | {r['top_p']:<5} | {note_col[:80]} |"
         )
         sys.stderr.write("done\n")
         if len(notes) > 1:

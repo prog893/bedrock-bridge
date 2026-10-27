@@ -548,6 +548,42 @@ def test_effort_dropped_with_warning_for_converse_discarding_models(caplog: pyte
     ]
 
 
+# Kimi K3, GPT-5.5 and GPT-6 Astra reject temperature and topP on Converse
+# ("This model doesn't support the temperature field", measured 2026-10-28), so
+# the bridge drops both for them; other models get both. Profile prefixes are
+# stripped before the lookup.
+def _inference_config(model_id: str | None) -> dict | None:
+    body = {
+        "model": "m",
+        "max_tokens": 64,
+        "temperature": 1,
+        "top_p": 0.9,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    kwargs, _ = anthropic_to_converse(body, model_id)
+    return kwargs.get("inferenceConfig")
+
+
+def test_sampling_fields_dropped_for_rejecting_models() -> None:
+    for model_id in ("global.moonshotai.kimi-k3", "global.openai.gpt-5.5", "us.openai.gpt-6-astra"):
+        assert _inference_config(model_id) == {"maxTokens": 64}
+    for model_id in ("moonshotai.kimi-k2.5", "global.zai.glm-5.3", None):
+        assert _inference_config(model_id) == {"maxTokens": 64, "temperature": 1, "topP": 0.9}
+
+
+# Each drop is logged as a warning once per (model, field).
+def test_sampling_field_drop_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    translate._inference_field_dropped_warned.clear()
+    with caplog.at_level("WARNING", logger="bedrock-bridge"):
+        for _ in range(3):
+            _inference_config("global.moonshotai.kimi-k3")
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == [
+        "temperature dropped for global.moonshotai.kimi-k3: the model rejects it on Converse",
+        "topP dropped for global.moonshotai.kimi-k3: the model rejects it on Converse",
+    ]
+
+
 # --strip-reasoning-history (opt-in): thinking blocks are removed from every
 # assistant turn in the request, including turns inside the current tool loop
 # (Kimi K3's Bedrock card: "remove reasoning blocks from prior turns").

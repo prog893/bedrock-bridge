@@ -179,6 +179,28 @@ _PROFILE_PREFIX = re.compile(r"^(global|us|eu|apac|jp|in|au|apne\d)\.")
 _effort_substituted_warned: set[tuple[str, str]] = set()
 _effort_dropped_warned: set[str] = set()
 
+# inferenceConfig fields each model rejects on Converse with "This model doesn't
+# support the <field> field" (measured 2026-10-28, ap-northeast-1, see
+# docs/compatibility.md). A listed field is dropped from the request, with a
+# warning once per (model, field). Unlisted models get every field.
+_SAMPLING_FIELDS = frozenset({"temperature", "topP"})
+_UNSUPPORTED_INFERENCE_FIELDS: dict[str, frozenset[str]] = {
+    "moonshotai.kimi-k3": _SAMPLING_FIELDS,
+    "openai.gpt-5.5": _SAMPLING_FIELDS,
+    "openai.gpt-6-astra": _SAMPLING_FIELDS,
+}
+_inference_field_dropped_warned: set[tuple[str, str]] = set()
+
+
+def _drop_unsupported_inference_fields(model_id: str, inf: dict[str, Any]) -> dict[str, Any]:
+    """`inf` without the fields `model_id` rejects (see _UNSUPPORTED_INFERENCE_FIELDS)."""
+    unsupported = _UNSUPPORTED_INFERENCE_FIELDS.get(_PROFILE_PREFIX.sub("", model_id), frozenset())
+    for field in sorted(unsupported & inf.keys()):
+        if (model_id, field) not in _inference_field_dropped_warned:
+            _inference_field_dropped_warned.add((model_id, field))
+            logger.warning(f"{field} dropped for {model_id}: the model rejects it on Converse")
+    return {k: v for k, v in inf.items() if k not in unsupported}
+
 
 def _reasoning_effort(model_id: str, level: Any) -> str | None:
     """Model-specific `reasoning_effort` for Claude Code's effort level, or None
@@ -248,10 +270,10 @@ def anthropic_to_converse(
     """Convert Anthropic Messages API request → Bedrock converse() kwargs.
 
     `model_id` is the routed Bedrock model; it selects model-specific request
-    fields (reasoning effort). `strip_reasoning_history` drops prior-turn
-    thinking blocks (opt-in, --strip-reasoning-history). Returns
-    (converse_kwargs, metadata) where metadata has info needed to build the
-    Anthropic-shaped response.
+    fields (reasoning effort, rejected inferenceConfig fields).
+    `strip_reasoning_history` drops prior-turn thinking blocks (opt-in,
+    --strip-reasoning-history). Returns (converse_kwargs, metadata) where
+    metadata has info needed to build the Anthropic-shaped response.
     """
     kwargs: dict[str, Any] = {}
 
@@ -281,6 +303,8 @@ def anthropic_to_converse(
     # stop_sequences intentionally dropped: every non-Anthropic Bedrock model
     # rejects the field with a ValidationException, and the bridge does not
     # serve Anthropic targets (preflight refuses anthropic.* main IDs).
+    if model_id:
+        inf = _drop_unsupported_inference_fields(model_id, inf)
     if inf:
         kwargs["inferenceConfig"] = inf
 

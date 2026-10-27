@@ -40,6 +40,33 @@ not asked to interpret pixels they cannot see.
 | `nvidia.nemotron-nano-12b-v2` | flaky | flaky | intermittent Bedrock `internalServerException` on this account/region |
 | `nvidia.nemotron-super-3-120b` | unavailable | unavailable | requests time out with no response in this account/region |
 
+## Request fields
+
+Direct Converse and ConverseStream calls, no bridge, `ap-northeast-1`,
+2026-10-28. `temperature` at 1 and 0.5, `topP` at 0.9; buffered and streamed
+gave the same result. "rejected" is `ValidationException: This model doesn't
+support the <field> field`. With both fields set, the error names only
+`temperature`. Rerun with `tests/manual/compat_matrix.py`.
+
+| Model | `temperature` | `topP` | `stopSequences` |
+|---|---|---|---|
+| [`moonshotai.kimi-k2.5`](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-5.html) | ok | ok | rejected |
+| [`global.moonshotai.kimi-k3`](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html) | rejected | rejected | rejected |
+| [`global.zai.glm-5.3`](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-5-3.html) | ok | ok | ok |
+| [`minimax.minimax-m2.5`](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-minimax-minimax-m2-5.html) | ok | ok | rejected |
+| [`qwen.qwen3-vl-235b-a22b`](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-vl-235b-a22b.html) | ok | ok | rejected |
+| [`deepseek.v3.2`](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html) | ok | ok | rejected |
+| [`openai.gpt-oss-120b-1:0`](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html) | ok | ok | rejected |
+| [`global.openai.gpt-5.5`](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html) | rejected | rejected | rejected |
+| [`global.openai.gpt-6-astra`](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html) | rejected | rejected | rejected |
+
+The model cards do not state sampling-parameter support for these models,
+except the [OpenAI](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-openai.html)
+parameter page for gpt-oss. Converse's `inferenceConfig` fields are listed in
+[InferenceConfiguration](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InferenceConfiguration.html).
+Per-model API support: [Models at a glance](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html),
+[API compatibility](https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html).
+
 ## Reading the results
 
 - **OK**: tool-use turn completes end-to-end through the bridge.

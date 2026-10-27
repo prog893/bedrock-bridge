@@ -70,8 +70,9 @@ tests/                offline tests, functional/ (real Bedrock), manual/ probes
   (PII) to the log file; the CLI asks for interactive consent and refuses on a
   non-TTY. Image bytes are redacted (`server._scrub_bytes_only`); text is
   verbatim. See [docs/logging.md](./docs/logging.md).
-- Fields Converse cannot carry are dropped; effort is mapped for the models in
-  `translate._EFFORT_BY_MODEL`
+- Fields Converse cannot carry are dropped; so are fields a model rejects
+  (`translate._UNSUPPORTED_INFERENCE_FIELDS`). Effort is mapped for the models
+  in `translate._EFFORT_BY_MODEL`
   ([ADR 0003](./docs/adr/0003-drop-untranslatable-fields.md)).
 
 ## Translation details (translate.py)
