@@ -18,5 +18,5 @@ Under `--claude`, pass `--settings '{"env": {...}}'` to `claude` before the user
 ## Consequences
 
 - User, project and local settings can no longer redirect a bridged session or change its model slots. Managed settings still can; they rank above `--settings`.
-- A `--settings` the user passes after `--claude` replaces the bridge's, so that user's settings files apply again. `--model` after `--claude` still picks the main model.
+- A `--settings` the user passes after `--claude` replaces the bridge's, so that user's settings files apply again. The CLI leaves it in place and prints a warning. `--model` after `--claude` still picks the main model.
 - Settings keys other than these `env` entries keep their file-based values.

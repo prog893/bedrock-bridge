@@ -112,7 +112,16 @@ def test_settings_flag_pins_routing(monkeypatch: pytest.MonkeyPatch) -> None:
     }
 
 
-def test_user_claude_args_follow_settings_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    args, _ = _spawn(monkeypatch, passthrough=["--settings", "mine.json"])
-    assert args[-2:] == ["--settings", "mine.json"]
+@pytest.mark.parametrize("passthrough", [["--settings", "mine.json"], ["--settings=mine.json"]])
+def test_user_settings_flag_wins_with_warning(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], passthrough: list[str]
+) -> None:
+    args, _ = _spawn(monkeypatch, passthrough=passthrough)
+    assert args[-len(passthrough) :] == passthrough
     assert args.index("--settings") == 1
+    assert "replaces the bridge's" in capsys.readouterr().err
+
+
+def test_no_warning_without_user_settings_flag(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _spawn(monkeypatch, passthrough=["--model", "haiku"])
+    assert "replaces the bridge's" not in capsys.readouterr().err

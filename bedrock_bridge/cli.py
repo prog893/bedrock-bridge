@@ -444,6 +444,12 @@ def _run_claude(
         claude_args += ["--print", print_arg]
     if passthrough:
         claude_args += passthrough
+    if any(arg == "--settings" or arg.startswith("--settings=") for arg in passthrough):
+        print(
+            "  ! Your --settings replaces the bridge's: an env block in a settings file can now"
+            " change the base URL and model slots.",
+            file=sys.stderr,
+        )
 
     print(f"  Launching: {' '.join(claude_args)}")
     print("  ─" * 20)
