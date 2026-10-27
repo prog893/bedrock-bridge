@@ -1,7 +1,7 @@
 # 0008. No silent truncation of tool results
 
 - Status: Accepted
-- Date: recorded 2026-10-27; the decision predates this record
+- Date: 2026-06-04 (same session as 0007)
 
 ## Context
 

@@ -1,7 +1,7 @@
 # 0010. Homebrew from git tags; no PyPI, no bottles
 
 - Status: Accepted
-- Date: recorded 2026-10-27; the decision predates this record
+- Date: 2026-06-04 (first formula, v0.1.0)
 
 ## Context
 

@@ -1,7 +1,7 @@
 # 0002. The bridge does not serve Claude models
 
 - Status: Accepted
-- Date: recorded 2026-10-27; the decision predates this record
+- Date: 2026-06-03 (initial commit)
 
 ## Context
 

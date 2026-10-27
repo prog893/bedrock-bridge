@@ -1,7 +1,7 @@
 # 0007. Map Bedrock errors to messages Claude Code recovers from
 
 - Status: Accepted
-- Date: recorded 2026-10-27; the decision predates this record (error samples from 2026-06-04)
+- Date: 2026-06-04
 
 ## Context
 
