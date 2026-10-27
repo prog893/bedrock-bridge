@@ -124,6 +124,7 @@ bedrock-bridge does not serve Claude models. Use Claude Code's native Bedrock mo
 - macOS only.
 - Bedrock models have a request body size cap, limiting the amount of data sendable in one request. When the cap is hit, Claude Code's TUI shows "Context limit reached · /compact or /clear to continue" and the session pauses. Run `/compact` to summarize old turns and continue, or `/clear` to start fresh. Common trigger: many large tool_result blocks (parallel screenshots, big file reads) accumulated across turns.
 - Image handling on a text-only main model depends on whether `--vision-model` is set; see [Images](#images).
+- Claude Code features that need a claude.ai login or an Anthropic Console API key do not work through the bridge, because Claude Code authenticates to it with the placeholder key `bedrock-bridge`. This includes [Remote Control](https://code.claude.com/docs/en/remote-control) ("API keys are not supported"), [Channels](https://code.claude.com/docs/en/channels) (not available on Amazon Bedrock) and claude.ai MCP connectors (Claude Code 2.1.293 logs `[claudeai-mcp] Disabled: API-key auth precedence active` with an API key).
 - Claude Code's `/model` command is not supported. Every request routes to the model configured at bridge startup; in-session model swaps have no effect. Restart the bridge with a different `--model` to switch.
 
 ## Images
