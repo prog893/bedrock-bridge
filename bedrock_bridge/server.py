@@ -586,8 +586,8 @@ def _format_error(err: str, body: dict | None) -> tuple[int, str, str]:
 
     # A request field the model rejects, on a model not yet in
     # translate._UNSUPPORTED_INFERENCE_FIELDS. The request cannot succeed
-    # unchanged, so it is an invalid request; as a 500, Claude Code retried it
-    # 10 times (#24).
+    # unchanged, so it is an invalid request; as an unclassified api_error,
+    # Claude Code retried it 10 times (#24).
     if re.search(r"doesn't support the (\w+) field\. Remove \1 and try again", err):
         return (
             400,

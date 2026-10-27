@@ -68,7 +68,8 @@ def test_output_token_cap_passthrough() -> None:
 
 
 # A field the model rejects, on a model the bridge does not drop it for yet,
-# is a 400 with the raw message. As a 500, Claude Code retried it 10 times (#24).
+# is a 400 with the raw message. As an unclassified api_error, Claude Code
+# retried it 10 times (#24).
 # Verbatim from Kimi K3 (2026-10-28).
 def test_unsupported_field_maps_to_400() -> None:
     err = (

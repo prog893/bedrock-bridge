@@ -62,7 +62,9 @@ Observed:
 (the same field name twice; `the image field for user messages` does not match).
 **Rewrite:** `400` + verbatim + a request to report the model ID.
 **Effect:** the request cannot succeed unchanged, so it is reported as an
-invalid request. As an unclassified 500, Claude Code retried it 10 times (#24). Fields already known
+invalid request. As an unclassified `api_error`, Claude Code retried it 10
+times (#24). On a streamed request the error arrives as an SSE `error` event
+after HTTP 200, as for every mapping here (#33). Fields already known
 to be rejected are dropped before the request is sent
 (`translate._UNSUPPORTED_INFERENCE_FIELDS`), so this catches models not yet in
 that table.

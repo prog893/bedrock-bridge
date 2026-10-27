@@ -46,7 +46,8 @@ Direct Converse and ConverseStream calls, no bridge, `ap-northeast-1`,
 2026-10-28. `temperature` at 1 and 0.5, `topP` at 0.9; buffered and streamed
 gave the same result. "rejected" is `ValidationException: This model doesn't
 support the <field> field`. With both fields set, the error names only
-`temperature`. Rerun with `tests/manual/compat_matrix.py`.
+`temperature`. `tests/manual/compat_matrix.py` reruns the buffered
+`temperature` (0.5) and `topP` (0.9) cases.
 
 | Model | `temperature` | `topP` | `stopSequences` |
 |---|---|---|---|
