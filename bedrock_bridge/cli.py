@@ -382,6 +382,7 @@ def _run_claude(
     passthrough: list[str],
     print_arg: str | None,
 ) -> None:
+    """Run `claude` against the proxy with routing pinned, and exit with its return code."""
     claude_env = {
         **os.environ,
         "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}",
