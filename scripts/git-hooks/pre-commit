@@ -34,10 +34,10 @@ else
     exit 0
 fi
 
-before=$(cat $files | cksum)
+before=$(cksum $files)
 "$@" check --fix --quiet $files
 "$@" format --quiet $files
-after=$(cat $files | cksum)
+after=$(cksum $files)
 
 if [ "$before" != "$after" ]; then
     echo "pre-commit: ruff fixed or reformatted staged files; review, stage and commit again:" >&2
