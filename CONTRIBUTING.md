@@ -17,18 +17,23 @@ git clone https://github.com/prog893/bedrock-bridge.git
 cd bedrock-bridge && uv venv && source .venv/bin/activate
 uv pip install -e '.[dev]'        # [dev] pulls in pytest
 pytest                            # run the suite
-git config core.hooksPath scripts/git-hooks   # run tests on every commit
+git config core.hooksPath scripts/git-hooks   # ruff fix and format on every commit
 ```
 
 The `[dev]` extra adds pytest; runtime installs never pull it in.
 
 ## Tests
 
+CI runs the offline suite, `ruff check` and `ruff format --check` on every pull
+request. The pre-commit hook runs ruff only: it applies fixes and formatting to
+the staged files and stops the commit when anything changed, so you can review
+and stage the result.
+
 - `pytest -m 'not functional'`: offline unit tests, no network. One case per
   past Bedrock-shape rejection; add one here when you fix a new field failure.
 - `pytest -m functional`: spawns the bridge against real Bedrock with
   hand-built payloads and asserts on the response envelope. Needs AWS
-  credentials and runs on the pre-commit hook. Defaults to minimax-m2.5
+  credentials; run it by hand before opening a PR. Defaults to minimax-m2.5
   (text) and kimi-k2.5 (image); override with `BEDROCK_BRIDGE_TEST_TEXT_MODEL`
   and `BEDROCK_BRIDGE_TEST_IMAGE_MODEL`.
 - `scripts/e2e_grade.py --model <id>`: drives a model through the bridge to

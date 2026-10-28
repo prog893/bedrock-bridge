@@ -28,7 +28,7 @@ testpaths = ["tests"]
 # they have no pytest assertions, so never auto-collect them.
 norecursedirs = ["tests/manual"]
 markers = [
-    "functional: hits a live bridge + real Bedrock (needs AWS creds; runs on pre-commit)",
+    "functional: hits a live bridge + real Bedrock (needs AWS creds; run by hand)",
 ]
 
 [tool.ruff]
