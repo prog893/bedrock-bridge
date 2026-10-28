@@ -507,7 +507,7 @@ def _run_describe_loop(client: Any, model_id: str, kwargs: dict, metadata: dict,
                         text = _describe_result_text(prompt, handle, answer)
                         is_error = False
                     except Exception as e:
-                        logger.error(f"vision model call failed for {handle}: {e}")
+                        logger.error(f"vision model call failed for {handle} (request_id={_request_id(e)}): {e}")
                         text = _describe_result_text(
                             prompt,
                             handle,
@@ -807,7 +807,8 @@ async def _stream_response(
     the client disconnect, so the bridge kept reading (and Bedrock kept
     generating) for a client that was gone (#36). On disconnect Starlette
     cancels this generator at its next await; the finally block then closes
-    the Bedrock stream.
+    the Bedrock stream. A read already waiting in its thread is not
+    interrupted, so the close happens when Bedrock sends its next event.
     """
     request_id = None
     stream = None

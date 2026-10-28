@@ -41,7 +41,7 @@ A single Anthropic-API request flows like this:
 5. `translate.converse_to_anthropic(...)` (non-streaming) or `translate.converse_stream_to_anthropic_events(...)` (streaming) converts the Bedrock response back to Anthropic shape.
 6. The proxy returns either a JSON body or an SSE stream of Anthropic events.
 
-The streaming leg runs `converse_stream` and each read from its event stream in a worker thread, so a long stream does not hold the event loop and other requests are served while it runs. When the client disconnects (an interrupted turn in Claude Code), Starlette cancels the response and the bridge stops reading and closes its connection to the Bedrock stream.
+The streaming leg runs `converse_stream` and each read from its event stream in a worker thread, so a long stream does not hold the event loop and other requests are served while it runs. When the client disconnects (an interrupted turn in Claude Code), Starlette cancels the response and the bridge closes the Bedrock stream when the next event arrives. A read already in progress is not interrupted; while the model generates, the wait is one event.
 
 ## Routing
 
