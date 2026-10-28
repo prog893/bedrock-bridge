@@ -41,6 +41,8 @@ A single Anthropic-API request flows like this:
 5. `translate.converse_to_anthropic(...)` (non-streaming) or `translate.converse_stream_to_anthropic_events(...)` (streaming) converts the Bedrock response back to Anthropic shape.
 6. The proxy returns either a JSON body or an SSE stream of Anthropic events.
 
+The streaming leg runs `converse_stream` and each read from its event stream in a worker thread, so a long stream does not hold the event loop and other requests are served while it runs. When the client disconnects (an interrupted turn in Claude Code), Starlette cancels the response and the bridge stops reading and closes its connection to the Bedrock stream.
+
 ## Routing
 
 When the CLI launches Claude Code under `--claude`, it sets two env vars on the spawned process:
@@ -218,7 +220,7 @@ The server logger has three tiers, selected by `BEDROCK_BRIDGE_LOG_LEVEL` (set b
 
 | Tier | Level | Adds |
 |------|-------|------|
-| `default` | `INFO` | One access line per request (`-> model_in=... routed=...`), plus warnings and errors. |
+| `default` | `INFO` | One line when a request arrives (`-> model_in=... routed=...`) and one when it ends (`<- routed=... request_id=...`), plus warnings and errors. |
 | `verbose` | `DEBUG` | Internal adaptation detail: vision-adapt counts, history-recall fixups, `describe_image` round counts and loop detection. |
 | `debug` | `TRACE` (custom, 5) | Request and response content: the full request body, outgoing Converse kwargs, the JSON response, and the per-call `describe_image` prompts. Image bytes are replaced with `<redacted: N bytes>`; all text is verbatim. |
 

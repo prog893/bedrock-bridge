@@ -18,11 +18,26 @@ boundary rule in the README).
 
 | Tier | Server level | uvicorn level | What it logs |
 |------|--------------|---------------|--------------|
-| `default` | `INFO` | `warning` | One access line per request (routed model, stream flag, tool count), plus warnings and errors. |
+| `default` | `INFO` | `warning` | One line when a request arrives (routed model, stream flag, tool count) and one when it ends (Bedrock request ID, and whether the client disconnected mid-stream), plus warnings and errors. |
 | `verbose` | `DEBUG` | `info` | Adds internal adaptation detail: vision adaptation (images stashed or stripped), history-recall fixups, `describe_image` round counts and loop detection. |
 | `debug` | `TRACE` | `debug` | Adds request and response content: the full request body, the outgoing Converse kwargs, the JSON response, and each `describe_image` prompt the main model authored. |
 
 Each tier is a superset of the one above it.
+
+## Bedrock request IDs
+
+The end-of-request line and each Bedrock error line carry Bedrock's request ID
+(`x-amzn-RequestId`), at every tier:
+
+```
+<- routed=global.zai.glm-5.3 stream=True request_id=<id>
+<- routed=global.zai.glm-5.3 stream=True request_id=<id> client disconnected
+Stream error (request_id=<id>): An error occurred (ValidationException) ...
+```
+
+Include the ID when reporting a model fault to AWS. It identifies the request
+without its content. A request that uses `describe_image` makes several
+Converse calls; the line carries the ID of the last one.
 
 ## The debug tier and PII
 
