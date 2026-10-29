@@ -1,4 +1,4 @@
-"""Streaming lifecycle and Bedrock request IDs (#36).
+"""Streaming lifecycle, event-loop use and Bedrock request IDs (#36, #40).
 
 The app is driven through its ASGI interface with a fake boto3 client, so
 Starlette's own disconnect handling runs and no AWS creds or network are used.
@@ -119,9 +119,20 @@ def test_disconnect_stops_reading_and_closes_stream(client: FakeClient, caplog: 
     assert "request_id=req-stream client disconnected" in caplog.text
 
 
-# The stream must not hold the event loop: other requests (the classifier,
-# the title call) arrive while a main turn is streaming.
-def test_stream_does_not_block_event_loop(client: FakeClient) -> None:
+# No Bedrock call may hold the event loop: other requests (the classifier,
+# the title call) arrive while a main turn is running. Streamed (#36) and
+# buffered (#40).
+@pytest.mark.parametrize("stream", [True, False])
+def test_bedrock_call_does_not_block_event_loop(
+    client: FakeClient, monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    fast_converse = client.converse
+
+    def slow_converse(**kwargs: Any) -> dict:
+        time.sleep(N_EVENTS * 0.01)  # as long as the fake stream
+        return fast_converse(**kwargs)
+
+    monkeypatch.setattr(client, "converse", slow_converse)
     ticks = 0
 
     async def main() -> None:
@@ -134,11 +145,11 @@ def test_stream_does_not_block_event_loop(client: FakeClient) -> None:
                 ticks += 1
 
         t = asyncio.create_task(ticker())
-        await _call({**BODY, "stream": True})
+        await _call({**BODY, "stream": stream})
         t.cancel()
 
     asyncio.run(main())
-    # The stream takes about N_EVENTS * 10 ms; a blocked loop ticks 0 times.
+    # The call takes about N_EVENTS * 10 ms; a blocked loop ticks 0 times.
     assert ticks > N_EVENTS / 4
 
 
