@@ -121,10 +121,12 @@ def test_disconnect_stops_reading_and_closes_stream(client: FakeClient, caplog: 
 
 # No Bedrock call may hold the event loop: other requests (the classifier,
 # the title call) arrive while a main turn is running. Streamed (#36) and
-# buffered (#40).
+# buffered (#40), each with and without the describe_image loop (an image
+# sent to a text-only main model with a vision model set).
+@pytest.mark.parametrize("image", [False, True])
 @pytest.mark.parametrize("stream", [True, False])
 def test_bedrock_call_does_not_block_event_loop(
-    client: FakeClient, monkeypatch: pytest.MonkeyPatch, stream: bool
+    client: FakeClient, monkeypatch: pytest.MonkeyPatch, stream: bool, image: bool
 ) -> None:
     fast_converse = client.converse
 
@@ -133,6 +135,12 @@ def test_bedrock_call_does_not_block_event_loop(
         return fast_converse(**kwargs)
 
     monkeypatch.setattr(client, "converse", slow_converse)
+    body = {**BODY, "stream": stream}
+    if image:
+        monkeypatch.setattr(server, "_main_supports_vision", False)
+        monkeypatch.setattr(server, "_vision_model", "fake.vision")
+        png = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}
+        body["messages"] = [{"role": "user", "content": [png, {"type": "text", "text": "what is this?"}]}]
     ticks = 0
 
     async def main() -> None:
@@ -145,7 +153,7 @@ def test_bedrock_call_does_not_block_event_loop(
                 ticks += 1
 
         t = asyncio.create_task(ticker())
-        await _call({**BODY, "stream": stream})
+        await _call(body)
         t.cancel()
 
     asyncio.run(main())
