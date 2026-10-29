@@ -739,16 +739,25 @@ async def messages(request: Request) -> Response:
         tool_cfg["tools"] = list(tool_cfg.get("tools", [])) + [_describe_tool_spec()]
 
     try:
+        # Every Bedrock call runs in a worker thread: on the event loop it holds
+        # every other request until Bedrock returns (#36, #40).
         if stream:
+            # Call Bedrock before sending any response, so an error it raises
+            # here returns its mapped HTTP status (#33). Only errors raised
+            # mid-stream are left to the SSE error event.
+            if describe_images:
+                response = await run_in_threadpool(
+                    _run_describe_loop, client, model_id, converse_kwargs, metadata, describe_images
+                )
+                logger.info(f"<- routed={model_id} stream=True request_id={_request_id(response)}")
+                _trace(lambda: f"buffered stream response: {json.dumps(_scrub_bytes_only(response), default=str)}")
+                events: AsyncIterator[str] | Iterator[str] = _buffered_message_to_sse(response, metadata)
+            else:
+                _trace(f"stream start: model={model_id}")
+                response = await run_in_threadpool(client.converse_stream, modelId=model_id, **converse_kwargs)
+                events = _stream_response(response, model_id, converse_kwargs, metadata, body)
             return StreamingResponse(
-                _stream_response(
-                    client,
-                    model_id,
-                    converse_kwargs,
-                    metadata,
-                    body,
-                    describe_images,
-                ),
+                events,
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -756,8 +765,6 @@ async def messages(request: Request) -> Response:
                 },
             )
         else:
-            # In a worker thread, as on the streaming path: on the event loop a
-            # buffered call holds every other request until Bedrock returns (#40).
             if describe_images:
                 response = await run_in_threadpool(
                     _run_describe_loop, client, model_id, converse_kwargs, metadata, describe_images
@@ -790,23 +797,18 @@ async def messages(request: Request) -> Response:
 
 
 async def _stream_response(
-    client: Any,
+    response: dict,
     model_id: str,
     kwargs: dict,
     metadata: dict,
     body: dict | None = None,
-    describe_images: dict[str, dict] | None = None,
 ) -> AsyncIterator[str]:
-    """Call converse_stream and yield Anthropic SSE events.
+    """Yield Anthropic SSE events from an open ConverseStream response.
 
-    When describe_images is set, the describe_image sub-loop must run, and that
-    loop is non-streaming (it inspects the assistant turn for tool calls before
-    deciding whether to continue). In that case we run the loop, buffer the
-    final message, and replay it as a synthetic SSE event sequence so the client
-    still receives a stream. The common no-image path streams directly from
-    Bedrock as before.
+    The HTTP status has been sent by the time this runs, so an error Bedrock
+    raises mid-stream becomes an SSE error event.
 
-    Every boto3 call runs in a worker thread. Run on the event loop, a stream
+    Each event read runs in a worker thread. On the event loop, a stream
     blocks every other request for its whole length, and Starlette never sees
     the client disconnect, so the bridge kept reading (and Bedrock kept
     generating) for a client that was gone (#36). On disconnect Starlette
@@ -814,24 +816,10 @@ async def _stream_response(
     the Bedrock stream. A read already waiting in its thread is not
     interrupted, so the close happens when Bedrock sends its next event.
     """
-    request_id = None
-    stream = None
+    request_id = _request_id(response)
+    stream = response["stream"]
     finished = False
     try:
-        if describe_images:
-            response = await run_in_threadpool(_run_describe_loop, client, model_id, kwargs, metadata, describe_images)
-            request_id = _request_id(response)
-            _trace(lambda: f"buffered stream response: {json.dumps(_scrub_bytes_only(response), default=str)}")
-            for chunk in _buffered_message_to_sse(response, metadata):
-                yield chunk
-            finished = True
-            logger.info(f"<- routed={model_id} stream=True request_id={request_id}")
-            return
-
-        _trace(f"stream start: model={model_id}")
-        response = await run_in_threadpool(client.converse_stream, modelId=model_id, **kwargs)
-        request_id = _request_id(response)
-        stream = response["stream"]
         events = iter(stream)
         # Per-stream state for the translator (synthesizes content_block_start
         # events for indices Bedrock never opens explicitly).
@@ -861,8 +849,7 @@ async def _stream_response(
         yield f"event: error\ndata: {json.dumps(payload)}\n\n"
 
     finally:
-        if stream is not None:
-            stream.close()
+        stream.close()
         if not finished:
             logger.info(f"<- routed={model_id} stream=True request_id={request_id} client disconnected")
 

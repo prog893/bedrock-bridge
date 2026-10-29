@@ -19,6 +19,20 @@ sits in the middle and has no channel to tell Claude Code a given model's
 context size or output cap ahead of time, so it translates the resulting error
 into a form Claude Code already knows how to handle.
 
+## Streamed requests
+
+The bridge calls `converse_stream` before it sends a response, so an error
+Bedrock raises from that call gets the mapped HTTP status and JSON error body,
+as on a buffered request. In a ConverseStream probe (ap-northeast-1,
+2026-10-28) every validation error tested (unsupported field, over-limit
+`maxTokens`, invalid model ID) was raised there, before any event.
+
+An error raised after the stream has started (Bedrock's in-stream exception
+events, such as `internalServerException`) arrives as an SSE `error` event after
+HTTP 200, with the mapped `error.type`. Claude Code (2.1.293) answers an SSE
+`error` event by logging `Error streaming, falling back to non-streaming mode`
+and repeating the request without streaming; on an HTTP 400 it does not (#33).
+
 Samples below are the inner message Bedrock returned, sometimes wrapped in a
 Mantle envelope like `Mantle streaming error ... ErrorEvent { error: APIError {
 ... message: "<inner>" ... } }`.
@@ -63,8 +77,7 @@ Observed:
 **Rewrite:** `400` + verbatim + a request to report the model ID.
 **Effect:** the request cannot succeed unchanged, so it is reported as an
 invalid request. As an unclassified `api_error`, Claude Code retried it 10
-times (#24). On a streamed request the error arrives as an SSE `error` event
-after HTTP 200, as for every mapping here (#33). Fields already known
+times (#24). Fields already known
 to be rejected are dropped before the request is sent
 (`translate._UNSUPPORTED_INFERENCE_FIELDS`), so this catches models not yet in
 that table.
