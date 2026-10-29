@@ -119,6 +119,17 @@ def test_disconnect_stops_reading_and_closes_stream(client: FakeClient, caplog: 
     assert "request_id=req-stream client disconnected" in caplog.text
 
 
+# converse_stream now runs before the response exists, so the client can be
+# gone before the generator reads anything (Esc during the call). Starlette
+# still enters the generator, which closes the stream.
+def test_disconnect_before_first_read_closes_stream(client: FakeClient, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="bedrock-bridge")
+    asyncio.run(_call({**BODY, "stream": True}, disconnect_after=0))
+    assert client.stream.closed.is_set()
+    assert client.stream.read == 0
+    assert "request_id=req-stream client disconnected" in caplog.text
+
+
 # No Bedrock call may hold the event loop: other requests (the classifier,
 # the title call) arrive while a main turn is running. Streamed (#36) and
 # buffered (#40), each with and without the describe_image loop (an image
@@ -200,11 +211,17 @@ def _status(sent: list[dict]) -> int:
 def test_stream_call_error_returns_mapped_status(
     client: FakeClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, image: bool
 ) -> None:
-    def fail(**kwargs: Any) -> NoReturn:
-        raise _client_error()
+    called: list[str] = []
 
-    monkeypatch.setattr(client, "converse_stream", fail)
-    monkeypatch.setattr(client, "converse", fail)
+    def failing(method: str) -> Any:
+        def fail(**kwargs: Any) -> NoReturn:
+            called.append(method)
+            raise _client_error()
+
+        return fail
+
+    monkeypatch.setattr(client, "converse_stream", failing("converse_stream"))
+    monkeypatch.setattr(client, "converse", failing("converse"))
     monkeypatch.setattr(server, "_dump_failure", lambda *a: None)
     body = {**BODY, "stream": True}
     if image:
@@ -214,6 +231,8 @@ def test_stream_call_error_returns_mapped_status(
         png = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}
         body["messages"] = [{"role": "user", "content": [png]}]
     sent = asyncio.run(_call(body))
+    # The describe_image loop calls buffered Converse; a text request streams.
+    assert called == (["converse"] if image else ["converse_stream"])
     assert _status(sent) == 400
     error = json.loads(_body_text(sent))["error"]
     assert error["type"] == "invalid_request_error"

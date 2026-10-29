@@ -25,7 +25,10 @@ The bridge calls `converse_stream` before it sends a response, so an error
 Bedrock raises from that call gets the mapped HTTP status and JSON error body,
 as on a buffered request. In a ConverseStream probe (ap-northeast-1,
 2026-10-28) every validation error tested (unsupported field, over-limit
-`maxTokens`, invalid model ID) was raised there, before any event.
+`maxTokens`, invalid model ID) was raised there, before any event. A request
+the vision model adapts (images for a text-only main model) runs the
+`describe_image` loop on buffered `converse` before the response, so its errors
+get the same status and body.
 
 An error raised after the stream has started (Bedrock's in-stream exception
 events, such as `internalServerException`) arrives as an SSE `error` event after
