@@ -32,7 +32,8 @@ The end-of-request line and each Bedrock error line carry Bedrock's request ID
 ```
 <- routed=global.zai.glm-5.3 stream=True request_id=<id>
 <- routed=global.zai.glm-5.3 stream=True request_id=<id> client disconnected
-Stream error (request_id=<id>): An error occurred (ValidationException) ...
+Bedrock error (request_id=<id>): An error occurred (ValidationException) ...
+Stream error (request_id=<id>): An error occurred (internalServerException) ...
 ```
 
 Include the ID when reporting a model fault to AWS. It identifies the request
