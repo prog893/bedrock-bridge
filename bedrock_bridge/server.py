@@ -756,10 +756,14 @@ async def messages(request: Request) -> Response:
                 },
             )
         else:
+            # In a worker thread, as on the streaming path: on the event loop a
+            # buffered call holds every other request until Bedrock returns (#40).
             if describe_images:
-                response = _run_describe_loop(client, model_id, converse_kwargs, metadata, describe_images)
+                response = await run_in_threadpool(
+                    _run_describe_loop, client, model_id, converse_kwargs, metadata, describe_images
+                )
             else:
-                response = client.converse(modelId=model_id, **converse_kwargs)
+                response = await run_in_threadpool(client.converse, modelId=model_id, **converse_kwargs)
             logger.info(f"<- routed={model_id} stream=False request_id={_request_id(response)}")
             result = converse_to_anthropic(response, metadata)
             _trace(lambda: f"response (json): {json.dumps(result)}")
