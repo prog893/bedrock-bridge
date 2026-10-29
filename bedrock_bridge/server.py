@@ -12,6 +12,7 @@ from typing import Any
 
 import boto3
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
@@ -506,7 +507,7 @@ def _run_describe_loop(client: Any, model_id: str, kwargs: dict, metadata: dict,
                         text = _describe_result_text(prompt, handle, answer)
                         is_error = False
                     except Exception as e:
-                        logger.error(f"vision model call failed for {handle}: {e}")
+                        logger.error(f"vision model call failed for {handle} (request_id={_request_id(e)}): {e}")
                         text = _describe_result_text(
                             prompt,
                             handle,
@@ -530,6 +531,16 @@ def _run_describe_loop(client: Any, model_id: str, kwargs: dict, metadata: dict,
     # then strip any describe_image block so none leaks to the client.
     logger.warning(f"describe_image loop cap ({_MAX_DESCRIBE_ROUNDS}) reached")
     return _strip_describe_blocks(client.converse(modelId=model_id, **kwargs))
+
+
+def _request_id(source: Any) -> str | None:
+    """Bedrock's x-amzn-RequestId, from a response dict or a botocore
+    ClientError. Not content, so it is logged at the default tier: it is what
+    AWS asks for when a model misbehaves."""
+    resp = source if isinstance(source, dict) else getattr(source, "response", None)
+    if not isinstance(resp, dict):
+        return None
+    return resp.get("ResponseMetadata", {}).get("RequestId")
 
 
 def _format_error(err: str, body: dict | None) -> tuple[int, str, str]:
@@ -749,12 +760,13 @@ async def messages(request: Request) -> Response:
                 response = _run_describe_loop(client, model_id, converse_kwargs, metadata, describe_images)
             else:
                 response = client.converse(modelId=model_id, **converse_kwargs)
+            logger.info(f"<- routed={model_id} stream=False request_id={_request_id(response)}")
             result = converse_to_anthropic(response, metadata)
             _trace(lambda: f"response (json): {json.dumps(result)}")
             return JSONResponse(result)
     except Exception as e:
         err_str = str(e)
-        logger.error(f"Bedrock error: {err_str}")
+        logger.error(f"Bedrock error (request_id={_request_id(e)}): {err_str}")
         # On validation errors, dump the incoming body + the outgoing Converse
         # kwargs so we can reproduce offline. Images are replaced with a
         # {bytes: <len>} marker to keep the dump small.
@@ -789,31 +801,52 @@ async def _stream_response(
     final message, and replay it as a synthetic SSE event sequence so the client
     still receives a stream. The common no-image path streams directly from
     Bedrock as before.
+
+    Every boto3 call runs in a worker thread. Run on the event loop, a stream
+    blocks every other request for its whole length, and Starlette never sees
+    the client disconnect, so the bridge kept reading (and Bedrock kept
+    generating) for a client that was gone (#36). On disconnect Starlette
+    cancels this generator at its next await; the finally block then closes
+    the Bedrock stream. A read already waiting in its thread is not
+    interrupted, so the close happens when Bedrock sends its next event.
     """
+    request_id = None
+    stream = None
+    finished = False
     try:
         if describe_images:
-            response = _run_describe_loop(client, model_id, kwargs, metadata, describe_images)
+            response = await run_in_threadpool(_run_describe_loop, client, model_id, kwargs, metadata, describe_images)
+            request_id = _request_id(response)
             _trace(lambda: f"buffered stream response: {json.dumps(_scrub_bytes_only(response), default=str)}")
             for chunk in _buffered_message_to_sse(response, metadata):
                 yield chunk
+            finished = True
+            logger.info(f"<- routed={model_id} stream=True request_id={request_id}")
             return
 
         _trace(f"stream start: model={model_id}")
-        response = client.converse_stream(modelId=model_id, **kwargs)
-        stream = response.get("stream", [])
+        response = await run_in_threadpool(client.converse_stream, modelId=model_id, **kwargs)
+        request_id = _request_id(response)
+        stream = response["stream"]
+        events = iter(stream)
         # Per-stream state for the translator (synthesizes content_block_start
         # events for indices Bedrock never opens explicitly).
         state: dict = {}
 
-        for event in stream:
+        while (event := await run_in_threadpool(next, events, None)) is not None:
             for event_type, data in converse_stream_to_anthropic_events(event, metadata, state):
                 yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
         yield "event: message_stop\ndata: {}\n\n"
+        finished = True
+        logger.info(f"<- routed={model_id} stream=True request_id={request_id}")
 
     except Exception as e:
+        finished = True
         err_str = str(e)
-        logger.error(f"Stream error: {err_str}")
+        # In-stream errors carry no request ID of their own; use the stream's.
+        request_id = _request_id(e) or request_id
+        logger.error(f"Stream error (request_id={request_id}): {err_str}")
         if body is not None and "ValidationException" in err_str:
             try:
                 _dump_failure(body, kwargs, err_str)
@@ -822,6 +855,12 @@ async def _stream_response(
         _, err_type, message = _format_error(err_str, body)
         payload = {"type": "error", "error": {"type": err_type, "message": message}}
         yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+
+    finally:
+        if stream is not None:
+            stream.close()
+        if not finished:
+            logger.info(f"<- routed={model_id} stream=True request_id={request_id} client disconnected")
 
 
 def _sse(event_type: str, data: dict) -> str:

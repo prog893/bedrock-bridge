@@ -69,7 +69,7 @@ Pass any Bedrock foundation ID (`moonshotai.kimi-k2.5`) or inference-profile ID 
 
 | Tier | Contents |
 |------|----------|
-| `default` | One access line per request, plus warnings and errors. |
+| `default` | One line when a request arrives and one when it ends (with the Bedrock request ID), plus warnings and errors. |
 | `verbose` | Adds internal adaptation detail (model routing, vision adaptation, history-recall fixups, `describe_image` rounds). |
 | `debug` | Adds request and response content (prompt text, full request body and outgoing Converse kwargs; image bytes redacted). |
 
