@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from typing import Any, NoReturn
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EventStreamError
 
 from bedrock_bridge import server
 
@@ -119,6 +119,17 @@ def test_disconnect_stops_reading_and_closes_stream(client: FakeClient, caplog: 
     assert "request_id=req-stream client disconnected" in caplog.text
 
 
+# converse_stream now runs before the response exists, so the client can be
+# gone before the generator reads anything (Esc during the call). Starlette
+# still enters the generator, which closes the stream.
+def test_disconnect_before_first_read_closes_stream(client: FakeClient, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="bedrock-bridge")
+    asyncio.run(_call({**BODY, "stream": True}, disconnect_after=0))
+    assert client.stream.closed.is_set()
+    assert client.stream.read == 0
+    assert "request_id=req-stream client disconnected" in caplog.text
+
+
 # No Bedrock call may hold the event loop: other requests (the classifier,
 # the title call) arrive while a main turn is running. Streamed (#36) and
 # buffered (#40), each with and without the describe_image loop (an image
@@ -176,27 +187,82 @@ def test_buffered_response_logs_request_id(client: FakeClient, caplog: pytest.Lo
     assert "<- routed=fake.model stream=False request_id=req-buffered" in caplog.text
 
 
+UNSUPPORTED = "This model doesn't support the stopSequences field. Remove stopSequences and try again."
+
+
 def _client_error() -> ClientError:
     return ClientError(
         {
-            "Error": {"Code": "ValidationException", "Message": "bad field"},
+            "Error": {"Code": "ValidationException", "Message": UNSUPPORTED},
             "ResponseMetadata": {"RequestId": "req-error", "HTTPStatusCode": 400},
         },
         "ConverseStream",
     )
 
 
-def test_stream_error_logs_request_id(
-    client: FakeClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def fail(**kwargs: Any) -> NoReturn:
-        raise _client_error()
+def _status(sent: list[dict]) -> int:
+    return next(m["status"] for m in sent if m["type"] == "http.response.start")
 
-    monkeypatch.setattr(client, "converse_stream", fail)
+
+# Bedrock raises validation errors from the converse_stream() call itself,
+# before any event. The bridge sent HTTP 200 first and reported them as an SSE
+# error event (#33); they now get the mapped status, as buffered requests do.
+@pytest.mark.parametrize("image", [False, True])
+def test_stream_call_error_returns_mapped_status(
+    client: FakeClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, image: bool
+) -> None:
+    called: list[str] = []
+
+    def failing(method: str) -> Any:
+        def fail(**kwargs: Any) -> NoReturn:
+            called.append(method)
+            raise _client_error()
+
+        return fail
+
+    monkeypatch.setattr(client, "converse_stream", failing("converse_stream"))
+    monkeypatch.setattr(client, "converse", failing("converse"))
     monkeypatch.setattr(server, "_dump_failure", lambda *a: None)
+    body = {**BODY, "stream": True}
+    if image:
+        # The describe_image loop runs buffered Converse calls before streaming.
+        monkeypatch.setattr(server, "_main_supports_vision", False)
+        monkeypatch.setattr(server, "_vision_model", "fake.vision")
+        png = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}
+        body["messages"] = [{"role": "user", "content": [png]}]
+    sent = asyncio.run(_call(body))
+    # The describe_image loop calls buffered Converse; a text request streams.
+    assert called == (["converse"] if image else ["converse_stream"])
+    assert _status(sent) == 400
+    error = json.loads(_body_text(sent))["error"]
+    assert error["type"] == "invalid_request_error"
+    assert "stopSequences" in error["message"]
+    assert "Bedrock error (request_id=req-error)" in caplog.text
+
+
+class FailingStream(FakeStream):
+    """Raises an in-stream exception event after the first delta."""
+
+    def __iter__(self) -> Iterator[dict]:
+        yield {"messageStart": {"role": "assistant"}}
+        yield {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "x"}}}
+        raise EventStreamError(
+            {"Error": {"Code": "internalServerException", "Message": "unexpected error"}}, "ConverseStream"
+        )
+
+
+# After the first event the status is on the wire; an error Bedrock raises
+# mid-stream can only reach the client as an SSE error event.
+def test_in_stream_error_is_sse_event(client: FakeClient, caplog: pytest.LogCaptureFixture) -> None:
+    client.stream = FailingStream()
     sent = asyncio.run(_call({**BODY, "stream": True}))
-    assert "event: error" in _body_text(sent)
-    assert "Stream error (request_id=req-error)" in caplog.text
+    assert _status(sent) == 200
+    text = _body_text(sent)
+    assert "event: content_block_delta" in text
+    assert text.rstrip().split("\n\n")[-1].startswith("event: error")
+    # The exception event has no request ID of its own; the stream's is logged.
+    assert "Stream error (request_id=req-stream)" in caplog.text
+    assert client.stream.closed.is_set()
     assert "client disconnected" not in caplog.text
 
 
