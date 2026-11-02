@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
@@ -543,6 +544,29 @@ def _request_id(source: Any) -> str | None:
     return resp.get("ResponseMetadata", {}).get("RequestId")
 
 
+def _log_end(
+    model_id: str,
+    stream: bool,
+    started: float,
+    request_id: str | None,
+    outcome: str,
+    stop: str | None = None,
+    usage: dict | None = None,
+) -> None:
+    """The one line logged when a request ends (#23). Stop reason and token
+    counts are Bedrock's own (stopReason, usage), when it sent them."""
+    line = f"<- routed={model_id} stream={stream} request_id={request_id} outcome={outcome}"
+    if stop:
+        line += f" stop={stop}"
+    line += f" {time.monotonic() - started:.1f}s"
+    if usage:
+        line += (
+            f" in={usage.get('inputTokens', 0)} out={usage.get('outputTokens', 0)}"
+            f" cache_read={usage.get('cacheReadInputTokens', 0)} cache_write={usage.get('cacheWriteInputTokens', 0)}"
+        )
+    logger.info(line)
+
+
 def _format_error(err: str, body: dict | None) -> tuple[int, str, str]:
     """Map a Bedrock error to a (status_code, error_type, message) tuple
     suitable for the Anthropic-shaped error envelope on the wire.
@@ -681,6 +705,7 @@ def _route(model_alias: str) -> str:
 
 
 async def messages(request: Request) -> Response:
+    started = time.monotonic()
     body = await request.json()
     stream = body.get("stream", False)
 
@@ -749,13 +774,21 @@ async def messages(request: Request) -> Response:
                 response = await run_in_threadpool(
                     _run_describe_loop, client, model_id, converse_kwargs, metadata, describe_images
                 )
-                logger.info(f"<- routed={model_id} stream=True request_id={_request_id(response)}")
+                _log_end(
+                    model_id,
+                    True,
+                    started,
+                    _request_id(response),
+                    "ok",
+                    response.get("stopReason"),
+                    response.get("usage"),
+                )
                 _trace(lambda: f"buffered stream response: {json.dumps(_scrub_bytes_only(response), default=str)}")
                 events: AsyncIterator[str] | Iterator[str] = _buffered_message_to_sse(response, metadata)
             else:
                 _trace(f"stream start: model={model_id}")
                 response = await run_in_threadpool(client.converse_stream, modelId=model_id, **converse_kwargs)
-                events = _stream_response(response, model_id, converse_kwargs, metadata, body)
+                events = _stream_response(response, model_id, started, converse_kwargs, metadata, body)
             return StreamingResponse(
                 events,
                 media_type="text/event-stream",
@@ -771,7 +804,9 @@ async def messages(request: Request) -> Response:
                 )
             else:
                 response = await run_in_threadpool(client.converse, modelId=model_id, **converse_kwargs)
-            logger.info(f"<- routed={model_id} stream=False request_id={_request_id(response)}")
+            _log_end(
+                model_id, False, started, _request_id(response), "ok", response.get("stopReason"), response.get("usage")
+            )
             result = converse_to_anthropic(response, metadata)
             _trace(lambda: f"response (json): {json.dumps(result)}")
             return JSONResponse(result)
@@ -787,6 +822,7 @@ async def messages(request: Request) -> Response:
             except Exception as dump_err:
                 logger.warning(f"failed to dump failure: {dump_err}")
         status, err_type, message = _format_error(err_str, body)
+        _log_end(model_id, stream, started, _request_id(e), f"error status={status}")
         return JSONResponse(
             {
                 "type": "error",
@@ -799,6 +835,7 @@ async def messages(request: Request) -> Response:
 async def _stream_response(
     response: dict,
     model_id: str,
+    started: float,
     kwargs: dict,
     metadata: dict,
     body: dict | None = None,
@@ -819,6 +856,8 @@ async def _stream_response(
     request_id = _request_id(response)
     stream = response["stream"]
     finished = False
+    # For the end line: Bedrock's stop reason (messageStop) and usage (metadata).
+    stop = usage = None
     try:
         events = iter(stream)
         # Per-stream state for the translator (synthesizes content_block_start
@@ -826,12 +865,16 @@ async def _stream_response(
         state: dict = {}
 
         while (event := await run_in_threadpool(next, events, None)) is not None:
+            if "messageStop" in event:
+                stop = event["messageStop"].get("stopReason")
+            elif "metadata" in event:
+                usage = event["metadata"].get("usage")
             for event_type, data in converse_stream_to_anthropic_events(event, metadata, state):
                 yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
         yield "event: message_stop\ndata: {}\n\n"
         finished = True
-        logger.info(f"<- routed={model_id} stream=True request_id={request_id}")
+        _log_end(model_id, True, started, request_id, "ok", stop, usage)
 
     except Exception as e:
         finished = True
@@ -845,13 +888,15 @@ async def _stream_response(
             except Exception as dump_err:
                 logger.warning(f"failed to dump failure: {dump_err}")
         _, err_type, message = _format_error(err_str, body)
+        # The status line has been sent (200); the error goes out as an event.
+        _log_end(model_id, True, started, request_id, "stream_error", stop, usage)
         payload = {"type": "error", "error": {"type": err_type, "message": message}}
         yield f"event: error\ndata: {json.dumps(payload)}\n\n"
 
     finally:
         stream.close()
         if not finished:
-            logger.info(f"<- routed={model_id} stream=True request_id={request_id} client disconnected")
+            _log_end(model_id, True, started, request_id, "client_disconnect", stop, usage)
 
 
 def _sse(event_type: str, data: dict) -> str:

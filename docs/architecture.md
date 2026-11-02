@@ -220,7 +220,7 @@ The server logger has three tiers, selected by `BEDROCK_BRIDGE_LOG_LEVEL` (set b
 
 | Tier | Level | Adds |
 |------|-------|------|
-| `default` | `INFO` | One line when a request arrives (`-> model_in=... routed=...`) and one when it ends (`<- routed=... request_id=...`), plus warnings and errors. |
+| `default` | `INFO` | One line when a request arrives (`-> model_in=... routed=...`) and one when it ends (`<- routed=... outcome=... stop=...`, with duration and token counts; see [logging.md](./logging.md#end-of-request-line)), plus warnings and errors. |
 | `verbose` | `DEBUG` | Internal adaptation detail: vision-adapt counts, history-recall fixups, `describe_image` round counts and loop detection. |
 | `debug` | `TRACE` (custom, 5) | Request and response content: the full request body, outgoing Converse kwargs, the JSON response, and the per-call `describe_image` prompts. Image bytes are replaced with `<redacted: N bytes>`; all text is verbatim. |
 
