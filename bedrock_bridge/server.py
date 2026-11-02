@@ -804,10 +804,10 @@ async def messages(request: Request) -> Response:
                 )
             else:
                 response = await run_in_threadpool(client.converse, modelId=model_id, **converse_kwargs)
+            result = converse_to_anthropic(response, metadata)
             _log_end(
                 model_id, False, started, _request_id(response), "ok", response.get("stopReason"), response.get("usage")
             )
-            result = converse_to_anthropic(response, metadata)
             _trace(lambda: f"response (json): {json.dumps(result)}")
             return JSONResponse(result)
     except Exception as e:

@@ -178,12 +178,15 @@ def test_completed_stream_logs_request_id(client: FakeClient, caplog: pytest.Log
     sent = asyncio.run(_call({**BODY, "stream": True}))
     assert "event: message_stop" in _body_text(sent)
     assert client.stream.closed.is_set()
-    assert re.search(
-        rf"<- routed=fake.model stream=True request_id=req-stream outcome=ok stop=end_turn [\d.]+s"
+    m = re.search(
+        rf"<- routed=fake.model stream=True request_id=req-stream outcome=ok stop=end_turn ([\d.]+)s"
         rf" in=1 out={N_EVENTS} cache_read=0 cache_write=0$",
         caplog.text,
         re.M,
     )
+    assert m
+    # The duration covers the whole stream (N_EVENTS reads of 10 ms each).
+    assert float(m.group(1)) >= N_EVENTS * 0.01 * 0.5
 
 
 def test_buffered_response_logs_request_id(client: FakeClient, caplog: pytest.LogCaptureFixture) -> None:
