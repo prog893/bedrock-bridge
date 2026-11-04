@@ -901,22 +901,23 @@ async def _replay_response(response: dict, model_id: str, started: float, metada
     """Replay a buffered response (the describe_image path) as SSE events, and
     log its end line once the replay ends, the way _stream_response does."""
     request_id = _request_id(response)
+    stop, usage = response.get("stopReason"), response.get("usage")
     finished = False
     try:
         for chunk in _buffered_message_to_sse(response, metadata):
             yield chunk
         finished = True
-        _log_end(model_id, True, started, request_id, "ok", response.get("stopReason"), response.get("usage"))
+        _log_end(model_id, True, started, request_id, "ok", stop, usage)
     except Exception as e:
         finished = True
         logger.error(f"Stream error (request_id={request_id}): {e}")
-        _log_end(model_id, True, started, request_id, "stream_error")
+        _log_end(model_id, True, started, request_id, "stream_error", stop, usage)
         _, err_type, message = _format_error(str(e), None)
         payload = {"type": "error", "error": {"type": err_type, "message": message}}
         yield f"event: error\ndata: {json.dumps(payload)}\n\n"
     finally:
         if not finished:
-            _log_end(model_id, True, started, request_id, "client_disconnect")
+            _log_end(model_id, True, started, request_id, "client_disconnect", stop, usage)
 
 
 def _sse(event_type: str, data: dict) -> str:

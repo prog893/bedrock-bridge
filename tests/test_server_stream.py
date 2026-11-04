@@ -268,10 +268,12 @@ def test_replay_failure_logs_stream_error_only(
     assert _status(sent) == 200
     assert _body_text(sent).rstrip().split("\n\n")[-1].startswith("event: error")
     assert "outcome=ok" not in caplog.text
-    assert (
-        len(re.findall(r"<- routed=fake.model stream=True request_id=req-buffered outcome=stream_error ", caplog.text))
-        == 1
+    # The full response is in hand, so the error line keeps stop and usage.
+    line = (
+        r"<- routed=fake.model stream=True request_id=req-buffered outcome=stream_error"
+        r" stop=end_turn [\d.]+s in=1 out=1 "
     )
+    assert len(re.findall(line, caplog.text)) == 1
 
 
 def _client_error() -> ClientError:
