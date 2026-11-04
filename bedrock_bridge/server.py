@@ -805,11 +805,14 @@ async def messages(request: Request) -> Response:
             else:
                 response = await run_in_threadpool(client.converse, modelId=model_id, **converse_kwargs)
             result = converse_to_anthropic(response, metadata)
+            _trace(lambda: f"response (json): {json.dumps(result)}")
+            # Built before the ok line, so a body that fails to serialize logs
+            # only its error outcome.
+            json_response = JSONResponse(result)
             _log_end(
                 model_id, False, started, _request_id(response), "ok", response.get("stopReason"), response.get("usage")
             )
-            _trace(lambda: f"response (json): {json.dumps(result)}")
-            return JSONResponse(result)
+            return json_response
     except Exception as e:
         err_str = str(e)
         logger.error(f"Bedrock error (request_id={_request_id(e)}): {err_str}")

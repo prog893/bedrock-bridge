@@ -203,6 +203,24 @@ def test_buffered_response_logs_request_id(client: FakeClient, caplog: pytest.Lo
 UNSUPPORTED = "This model doesn't support the stopSequences field. Remove stopSequences and try again."
 
 
+# A converted body that JSONResponse cannot serialize (a non-finite number in a
+# tool input) must log one end line, the error.
+def test_unserializable_buffered_response_logs_only_error(
+    client: FakeClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO, logger="bedrock-bridge")
+    response = client.converse()
+    response["output"]["message"]["content"] = [
+        {"toolUse": {"toolUseId": "t1", "name": "Bash", "input": {"x": float("nan")}}}
+    ]
+    response["stopReason"] = "tool_use"
+    monkeypatch.setattr(client, "converse", lambda **kwargs: response)
+    sent = asyncio.run(_call(BODY))
+    assert _status(sent) >= 400
+    assert "outcome=ok" not in caplog.text
+    assert len(re.findall(r"<- routed=fake.model stream=False .* outcome=error status=\d+ ", caplog.text)) == 1
+
+
 def _client_error() -> ClientError:
     return ClientError(
         {
