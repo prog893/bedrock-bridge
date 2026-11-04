@@ -36,8 +36,10 @@ Every request logs one line when it ends, at every tier:
 ```
 
 - `outcome`: `ok`; `error status=N`, the mapped HTTP status the client got;
-  `stream_error`, an error Bedrock raised after the stream started, sent to the
-  client as an SSE `error` event after HTTP 200; or `client_disconnect`.
+  `stream_error`, any error after HTTP 200 was sent (an exception Bedrock
+  raised mid-stream, or a bridge failure while translating or replaying the
+  response), sent to the client as an SSE `error` event; or
+  `client_disconnect`. The `Stream error` line before it has the message.
 - `stop` and the token counts are Bedrock's own `stopReason` and `usage`
   (`inputTokens`, `outputTokens`, `cacheReadInputTokens`,
   `cacheWriteInputTokens`). A request that ends before Bedrock sends them logs
