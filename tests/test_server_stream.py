@@ -218,7 +218,60 @@ def test_unserializable_buffered_response_logs_only_error(
     sent = asyncio.run(_call(BODY))
     assert _status(sent) >= 400
     assert "outcome=ok" not in caplog.text
-    assert len(re.findall(r"<- routed=fake.model stream=False .* outcome=error status=\d+ ", caplog.text)) == 1
+    # The error carries no Bedrock response; the line keeps the response's ID.
+    assert "Bedrock error (request_id=req-buffered)" in caplog.text
+    assert (
+        len(
+            re.findall(
+                r"<- routed=fake.model stream=False request_id=req-buffered outcome=error status=\d+ ", caplog.text
+            )
+        )
+        == 1
+    )
+
+
+def _image_body(monkeypatch: pytest.MonkeyPatch, stream: bool) -> dict:
+    """An image for a text-only main model with a vision model set, so the
+    describe_image loop runs on buffered Converse."""
+    monkeypatch.setattr(server, "_main_supports_vision", False)
+    monkeypatch.setattr(server, "_vision_model", "fake.vision")
+    png = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}
+    return {**BODY, "stream": stream, "messages": [{"role": "user", "content": [png]}]}
+
+
+# On the streamed describe_image path the response is replayed as SSE; its end
+# line comes after the replay, with one outcome.
+def test_replayed_stream_logs_end_after_replay(
+    client: FakeClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO, logger="bedrock-bridge")
+    sent = asyncio.run(_call(_image_body(monkeypatch, stream=True)))
+    assert "event: message_stop" in _body_text(sent)
+    assert re.search(
+        r"<- routed=fake.model stream=True request_id=req-buffered outcome=ok stop=end_turn [\d.]+s in=1 out=1 ",
+        caplog.text,
+    )
+    assert len(re.findall("<- routed", caplog.text)) == 1
+
+
+def test_replay_failure_logs_stream_error_only(
+    client: FakeClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO, logger="bedrock-bridge")
+
+    def failing_replay(response: dict, metadata: dict) -> Iterator[str]:
+        yield "event: message_start\ndata: {}\n\n"
+        raise ValueError("replay failed")
+
+    monkeypatch.setattr(server, "_buffered_message_to_sse", failing_replay)
+    sent = asyncio.run(_call(_image_body(monkeypatch, stream=True)))
+    assert _status(sent) == 200
+    assert _body_text(sent).rstrip().split("\n\n")[-1].startswith("event: error")
+    assert "outcome=ok" not in caplog.text
+    assert (
+        len(re.findall(r"<- routed=fake.model stream=True request_id=req-buffered outcome=stream_error ", caplog.text))
+        == 1
+    )
 
 
 def _client_error() -> ClientError:
