@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
@@ -543,6 +544,29 @@ def _request_id(source: Any) -> str | None:
     return resp.get("ResponseMetadata", {}).get("RequestId")
 
 
+def _log_end(
+    model_id: str,
+    stream: bool,
+    started: float,
+    request_id: str | None,
+    outcome: str,
+    stop: str | None = None,
+    usage: dict | None = None,
+) -> None:
+    """The one line logged when a request ends (#23). Stop reason and token
+    counts are Bedrock's own (stopReason, usage), when it sent them."""
+    line = f"<- routed={model_id} stream={stream} request_id={request_id} outcome={outcome}"
+    if stop:
+        line += f" stop={stop}"
+    line += f" {time.monotonic() - started:.1f}s"
+    if usage:
+        line += (
+            f" in={usage.get('inputTokens', 0)} out={usage.get('outputTokens', 0)}"
+            f" cache_read={usage.get('cacheReadInputTokens', 0)} cache_write={usage.get('cacheWriteInputTokens', 0)}"
+        )
+    logger.info(line)
+
+
 def _format_error(err: str, body: dict | None) -> tuple[int, str, str]:
     """Map a Bedrock error to a (status_code, error_type, message) tuple
     suitable for the Anthropic-shaped error envelope on the wire.
@@ -681,6 +705,7 @@ def _route(model_alias: str) -> str:
 
 
 async def messages(request: Request) -> Response:
+    started = time.monotonic()
     body = await request.json()
     stream = body.get("stream", False)
 
@@ -738,6 +763,7 @@ async def messages(request: Request) -> Response:
         tool_cfg = converse_kwargs.setdefault("toolConfig", {"tools": []})
         tool_cfg["tools"] = list(tool_cfg.get("tools", [])) + [_describe_tool_spec()]
 
+    response: dict | None = None
     try:
         # Every Bedrock call runs in a worker thread: on the event loop it holds
         # every other request until Bedrock returns (#36, #40).
@@ -749,13 +775,12 @@ async def messages(request: Request) -> Response:
                 response = await run_in_threadpool(
                     _run_describe_loop, client, model_id, converse_kwargs, metadata, describe_images
                 )
-                logger.info(f"<- routed={model_id} stream=True request_id={_request_id(response)}")
                 _trace(lambda: f"buffered stream response: {json.dumps(_scrub_bytes_only(response), default=str)}")
-                events: AsyncIterator[str] | Iterator[str] = _buffered_message_to_sse(response, metadata)
+                events = _replay_response(response, model_id, started, metadata)
             else:
                 _trace(f"stream start: model={model_id}")
                 response = await run_in_threadpool(client.converse_stream, modelId=model_id, **converse_kwargs)
-                events = _stream_response(response, model_id, converse_kwargs, metadata, body)
+                events = _stream_response(response, model_id, started, converse_kwargs, metadata, body)
             return StreamingResponse(
                 events,
                 media_type="text/event-stream",
@@ -771,13 +796,21 @@ async def messages(request: Request) -> Response:
                 )
             else:
                 response = await run_in_threadpool(client.converse, modelId=model_id, **converse_kwargs)
-            logger.info(f"<- routed={model_id} stream=False request_id={_request_id(response)}")
             result = converse_to_anthropic(response, metadata)
             _trace(lambda: f"response (json): {json.dumps(result)}")
-            return JSONResponse(result)
+            # Built before the ok line, so a body that fails to serialize logs
+            # only its error outcome.
+            json_response = JSONResponse(result)
+            _log_end(
+                model_id, False, started, _request_id(response), "ok", response.get("stopReason"), response.get("usage")
+            )
+            return json_response
     except Exception as e:
         err_str = str(e)
-        logger.error(f"Bedrock error (request_id={_request_id(e)}): {err_str}")
+        # A failure after Bedrock answered (conversion, serialization) carries
+        # no request ID of its own; use the response's.
+        request_id = _request_id(e) or _request_id(response)
+        logger.error(f"Bedrock error (request_id={request_id}): {err_str}")
         # On validation errors, dump the incoming body + the outgoing Converse
         # kwargs so we can reproduce offline. Images are replaced with a
         # {bytes: <len>} marker to keep the dump small.
@@ -787,6 +820,7 @@ async def messages(request: Request) -> Response:
             except Exception as dump_err:
                 logger.warning(f"failed to dump failure: {dump_err}")
         status, err_type, message = _format_error(err_str, body)
+        _log_end(model_id, stream, started, request_id, f"error status={status}")
         return JSONResponse(
             {
                 "type": "error",
@@ -799,6 +833,7 @@ async def messages(request: Request) -> Response:
 async def _stream_response(
     response: dict,
     model_id: str,
+    started: float,
     kwargs: dict,
     metadata: dict,
     body: dict | None = None,
@@ -819,6 +854,8 @@ async def _stream_response(
     request_id = _request_id(response)
     stream = response["stream"]
     finished = False
+    # For the end line: Bedrock's stop reason (messageStop) and usage (metadata).
+    stop = usage = None
     try:
         events = iter(stream)
         # Per-stream state for the translator (synthesizes content_block_start
@@ -826,12 +863,16 @@ async def _stream_response(
         state: dict = {}
 
         while (event := await run_in_threadpool(next, events, None)) is not None:
+            if "messageStop" in event:
+                stop = event["messageStop"].get("stopReason")
+            elif "metadata" in event:
+                usage = event["metadata"].get("usage")
             for event_type, data in converse_stream_to_anthropic_events(event, metadata, state):
                 yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
         yield "event: message_stop\ndata: {}\n\n"
         finished = True
-        logger.info(f"<- routed={model_id} stream=True request_id={request_id}")
+        _log_end(model_id, True, started, request_id, "ok", stop, usage)
 
     except Exception as e:
         finished = True
@@ -845,13 +886,38 @@ async def _stream_response(
             except Exception as dump_err:
                 logger.warning(f"failed to dump failure: {dump_err}")
         _, err_type, message = _format_error(err_str, body)
+        # The status line has been sent (200); the error goes out as an event.
+        _log_end(model_id, True, started, request_id, "stream_error", stop, usage)
         payload = {"type": "error", "error": {"type": err_type, "message": message}}
         yield f"event: error\ndata: {json.dumps(payload)}\n\n"
 
     finally:
         stream.close()
         if not finished:
-            logger.info(f"<- routed={model_id} stream=True request_id={request_id} client disconnected")
+            _log_end(model_id, True, started, request_id, "client_disconnect", stop, usage)
+
+
+async def _replay_response(response: dict, model_id: str, started: float, metadata: dict) -> AsyncIterator[str]:
+    """Replay a buffered response (the describe_image path) as SSE events, and
+    log its end line once the replay ends, the way _stream_response does."""
+    request_id = _request_id(response)
+    stop, usage = response.get("stopReason"), response.get("usage")
+    finished = False
+    try:
+        for chunk in _buffered_message_to_sse(response, metadata):
+            yield chunk
+        finished = True
+        _log_end(model_id, True, started, request_id, "ok", stop, usage)
+    except Exception as e:
+        finished = True
+        logger.error(f"Stream error (request_id={request_id}): {e}")
+        _log_end(model_id, True, started, request_id, "stream_error", stop, usage)
+        _, err_type, message = _format_error(str(e), None)
+        payload = {"type": "error", "error": {"type": err_type, "message": message}}
+        yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+    finally:
+        if not finished:
+            _log_end(model_id, True, started, request_id, "client_disconnect", stop, usage)
 
 
 def _sse(event_type: str, data: dict) -> str:

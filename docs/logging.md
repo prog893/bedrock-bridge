@@ -18,27 +18,48 @@ boundary rule in the README).
 
 | Tier | Server level | uvicorn level | What it logs |
 |------|--------------|---------------|--------------|
-| `default` | `INFO` | `warning` | One line when a request arrives (routed model, stream flag, tool count) and one when it ends (Bedrock request ID, and whether the client disconnected mid-stream), plus warnings and errors. |
+| `default` | `INFO` | `warning` | One line when a request arrives (routed model, stream flag, tool count) and one when it ends (outcome, stop reason, duration, token counts, Bedrock request ID), plus warnings and errors. |
 | `verbose` | `DEBUG` | `info` | Adds internal adaptation detail: vision adaptation (images stashed or stripped), history-recall fixups, `describe_image` round counts and loop detection. |
 | `debug` | `TRACE` | `debug` | Adds request and response content: the full request body, the outgoing Converse kwargs, the JSON response, and each `describe_image` prompt the main model authored. |
 
 Each tier is a superset of the one above it.
 
-## Bedrock request IDs
+## End-of-request line
 
-The end-of-request line and each Bedrock error line carry Bedrock's request ID
-(`x-amzn-RequestId`), at every tier:
+Every request logs one line when it ends, at every tier:
 
 ```
-<- routed=global.zai.glm-5.3 stream=True request_id=<id>
-<- routed=global.zai.glm-5.3 stream=True request_id=<id> client disconnected
+<- routed=global.zai.glm-5.3 stream=True request_id=<id> outcome=ok stop=tool_use 12.4s in=2 out=270 cache_read=135414 cache_write=0
+<- routed=global.zai.glm-5.3 stream=True request_id=<id> outcome=error status=400 1.1s
+<- routed=global.zai.glm-5.3 stream=True request_id=<id> outcome=stream_error 7.2s
+<- routed=global.zai.glm-5.3 stream=True request_id=<id> outcome=client_disconnect 4.0s
+```
+
+- `outcome`: `ok`; `error status=N`, the mapped HTTP status the client got;
+  `stream_error`, any error after HTTP 200 was sent (an exception Bedrock
+  raised mid-stream, or a bridge failure while translating or replaying the
+  response), sent to the client as an SSE `error` event; or
+  `client_disconnect`. The `Stream error` line before it has the message.
+- `stop` and the token counts are Bedrock's own `stopReason` and `usage`
+  (`inputTokens`, `outputTokens`, `cacheReadInputTokens`,
+  `cacheWriteInputTokens`). A request that ends before Bedrock sends them logs
+  without them.
+- The duration runs from the request's arrival to its end. For a stream it
+  covers the whole stream.
+- When Claude Code retries a failed streamed request without streaming, the
+  retry is a separate request with its own pair of lines.
+
+Errors also log an `ERROR` line with Bedrock's message:
+
+```
 Bedrock error (request_id=<id>): An error occurred (ValidationException) ...
 Stream error (request_id=<id>): An error occurred (internalServerException) ...
 ```
 
-Include the ID when reporting a model fault to AWS. It identifies the request
-without its content. A request that uses `describe_image` makes several
-Converse calls; the line carries the ID of the last one.
+`request_id` is Bedrock's `x-amzn-RequestId`. Include it when reporting a model
+fault to AWS. It identifies the request without its content. A request that
+uses `describe_image` makes several Converse calls; the line carries the ID,
+stop reason and usage of the last one.
 
 ## The debug tier and PII
 

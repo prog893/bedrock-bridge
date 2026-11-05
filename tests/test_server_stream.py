@@ -7,6 +7,7 @@ Starlette's own disconnect handling runs and no AWS creds or network are used.
 import asyncio
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -116,7 +117,7 @@ def test_disconnect_stops_reading_and_closes_stream(client: FakeClient, caplog: 
     asyncio.run(_call({**BODY, "stream": True}, disconnect_after=0.2))
     assert client.stream.closed.is_set()
     assert client.stream.read < N_EVENTS / 2
-    assert "request_id=req-stream client disconnected" in caplog.text
+    assert "request_id=req-stream outcome=client_disconnect " in caplog.text
 
 
 # converse_stream now runs before the response exists, so the client can be
@@ -127,7 +128,7 @@ def test_disconnect_before_first_read_closes_stream(client: FakeClient, caplog: 
     asyncio.run(_call({**BODY, "stream": True}, disconnect_after=0))
     assert client.stream.closed.is_set()
     assert client.stream.read == 0
-    assert "request_id=req-stream client disconnected" in caplog.text
+    assert "request_id=req-stream outcome=client_disconnect " in caplog.text
 
 
 # No Bedrock call may hold the event loop: other requests (the classifier,
@@ -177,17 +178,102 @@ def test_completed_stream_logs_request_id(client: FakeClient, caplog: pytest.Log
     sent = asyncio.run(_call({**BODY, "stream": True}))
     assert "event: message_stop" in _body_text(sent)
     assert client.stream.closed.is_set()
-    assert "<- routed=fake.model stream=True request_id=req-stream\n" in caplog.text + "\n"
-    assert "client disconnected" not in caplog.text
+    m = re.search(
+        rf"<- routed=fake.model stream=True request_id=req-stream outcome=ok stop=end_turn ([\d.]+)s"
+        rf" in=1 out={N_EVENTS} cache_read=0 cache_write=0$",
+        caplog.text,
+        re.M,
+    )
+    assert m
+    # The duration covers the whole stream (N_EVENTS reads of 10 ms each).
+    assert float(m.group(1)) >= N_EVENTS * 0.01 * 0.5
 
 
 def test_buffered_response_logs_request_id(client: FakeClient, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO, logger="bedrock-bridge")
     asyncio.run(_call(BODY))
-    assert "<- routed=fake.model stream=False request_id=req-buffered" in caplog.text
+    assert re.search(
+        r"<- routed=fake.model stream=False request_id=req-buffered outcome=ok stop=end_turn [\d.]+s"
+        r" in=1 out=1 cache_read=0 cache_write=0$",
+        caplog.text,
+        re.M,
+    )
 
 
 UNSUPPORTED = "This model doesn't support the stopSequences field. Remove stopSequences and try again."
+
+
+# A converted body that JSONResponse cannot serialize (a non-finite number in a
+# tool input) must log one end line, the error.
+def test_unserializable_buffered_response_logs_only_error(
+    client: FakeClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO, logger="bedrock-bridge")
+    response = client.converse()
+    response["output"]["message"]["content"] = [
+        {"toolUse": {"toolUseId": "t1", "name": "Bash", "input": {"x": float("nan")}}}
+    ]
+    response["stopReason"] = "tool_use"
+    monkeypatch.setattr(client, "converse", lambda **kwargs: response)
+    sent = asyncio.run(_call(BODY))
+    assert _status(sent) >= 400
+    assert "outcome=ok" not in caplog.text
+    # The error carries no Bedrock response; the line keeps the response's ID.
+    assert "Bedrock error (request_id=req-buffered)" in caplog.text
+    assert (
+        len(
+            re.findall(
+                r"<- routed=fake.model stream=False request_id=req-buffered outcome=error status=\d+ ", caplog.text
+            )
+        )
+        == 1
+    )
+
+
+def _image_body(monkeypatch: pytest.MonkeyPatch, stream: bool) -> dict:
+    """An image for a text-only main model with a vision model set, so the
+    describe_image loop runs on buffered Converse."""
+    monkeypatch.setattr(server, "_main_supports_vision", False)
+    monkeypatch.setattr(server, "_vision_model", "fake.vision")
+    png = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}
+    return {**BODY, "stream": stream, "messages": [{"role": "user", "content": [png]}]}
+
+
+# On the streamed describe_image path the response is replayed as SSE; its end
+# line comes after the replay, with one outcome.
+def test_replayed_stream_logs_end_after_replay(
+    client: FakeClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO, logger="bedrock-bridge")
+    sent = asyncio.run(_call(_image_body(monkeypatch, stream=True)))
+    assert "event: message_stop" in _body_text(sent)
+    assert re.search(
+        r"<- routed=fake.model stream=True request_id=req-buffered outcome=ok stop=end_turn [\d.]+s in=1 out=1 ",
+        caplog.text,
+    )
+    assert len(re.findall("<- routed", caplog.text)) == 1
+
+
+def test_replay_failure_logs_stream_error_only(
+    client: FakeClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO, logger="bedrock-bridge")
+
+    def failing_replay(response: dict, metadata: dict) -> Iterator[str]:
+        yield "event: message_start\ndata: {}\n\n"
+        raise ValueError("replay failed")
+
+    monkeypatch.setattr(server, "_buffered_message_to_sse", failing_replay)
+    sent = asyncio.run(_call(_image_body(monkeypatch, stream=True)))
+    assert _status(sent) == 200
+    assert _body_text(sent).rstrip().split("\n\n")[-1].startswith("event: error")
+    assert "outcome=ok" not in caplog.text
+    # The full response is in hand, so the error line keeps stop and usage.
+    line = (
+        r"<- routed=fake.model stream=True request_id=req-buffered outcome=stream_error"
+        r" stop=end_turn [\d.]+s in=1 out=1 "
+    )
+    assert len(re.findall(line, caplog.text)) == 1
 
 
 def _client_error() -> ClientError:
@@ -211,6 +297,7 @@ def _status(sent: list[dict]) -> int:
 def test_stream_call_error_returns_mapped_status(
     client: FakeClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, image: bool
 ) -> None:
+    caplog.set_level(logging.INFO, logger="bedrock-bridge")
     called: list[str] = []
 
     def failing(method: str) -> Any:
@@ -238,6 +325,9 @@ def test_stream_call_error_returns_mapped_status(
     assert error["type"] == "invalid_request_error"
     assert "stopSequences" in error["message"]
     assert "Bedrock error (request_id=req-error)" in caplog.text
+    assert re.search(
+        r"<- routed=fake.model stream=True request_id=req-error outcome=error status=400 [\d.]+s$", caplog.text, re.M
+    )
 
 
 class FailingStream(FakeStream):
@@ -254,6 +344,7 @@ class FailingStream(FakeStream):
 # After the first event the status is on the wire; an error Bedrock raises
 # mid-stream can only reach the client as an SSE error event.
 def test_in_stream_error_is_sse_event(client: FakeClient, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="bedrock-bridge")
     client.stream = FailingStream()
     sent = asyncio.run(_call({**BODY, "stream": True}))
     assert _status(sent) == 200
@@ -262,8 +353,11 @@ def test_in_stream_error_is_sse_event(client: FakeClient, caplog: pytest.LogCapt
     assert text.rstrip().split("\n\n")[-1].startswith("event: error")
     # The exception event has no request ID of its own; the stream's is logged.
     assert "Stream error (request_id=req-stream)" in caplog.text
+    assert re.search(
+        r"<- routed=fake.model stream=True request_id=req-stream outcome=stream_error [\d.]+s$", caplog.text, re.M
+    )
     assert client.stream.closed.is_set()
-    assert "client disconnected" not in caplog.text
+    assert "client_disconnect" not in caplog.text
 
 
 def test_request_id_sources() -> None:
