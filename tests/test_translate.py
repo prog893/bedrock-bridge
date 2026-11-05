@@ -467,17 +467,10 @@ def _effort_fields(model_id: str | None, effort: str | None) -> dict | None:
     return kwargs.get("additionalModelRequestFields")
 
 
-# GLM 5.3 takes low/high/max (omitting the field means max). Levels it lacks
-# go to the highest supported value below them: medium -> low, xhigh -> high.
-def test_effort_glm_5_3_maps_to_low_high_max() -> None:
-    got = {lvl: _effort_fields("global.zai.glm-5.3", lvl) for lvl in ("low", "medium", "high", "xhigh", "max")}
-    assert got == {
-        "low": {"reasoning_effort": "low"},
-        "medium": {"reasoning_effort": "low"},
-        "high": {"reasoning_effort": "high"},
-        "xhigh": {"reasoning_effort": "high"},
-        "max": {"reasoning_effort": "max"},
-    }
+# GLM 5.3 takes every Claude Code level as is (AWS model card, #29).
+def test_effort_glm_5_3_passes_every_level() -> None:
+    for lvl in ("low", "medium", "high", "xhigh", "max"):
+        assert _effort_fields("global.zai.glm-5.3", lvl) == {"reasoning_effort": lvl}
 
 
 # Models whose Bedrock validator stops at high reject xhigh and max with a
@@ -506,11 +499,11 @@ def test_effort_substitution_warns_once(caplog: pytest.LogCaptureFixture) -> Non
         for _ in range(3):
             _effort_fields("zai.glm-5", "max")
         _effort_fields("zai.glm-5", "high")
-        _effort_fields("global.zai.glm-5.3", "xhigh")
+        _effort_fields("global.moonshotai.kimi-k2.5", "xhigh")
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert warnings == [
         "effort 'max' is not supported by zai.glm-5; using 'high' (supported: low, medium, high)",
-        "effort 'xhigh' is not supported by global.zai.glm-5.3; using 'high' (supported: low, high, max)",
+        "effort 'xhigh' is not supported by global.moonshotai.kimi-k2.5; using 'high' (supported: low, medium, high)",
     ]
 
 

@@ -159,7 +159,9 @@ def _fold_system_messages(messages: list[dict]) -> tuple[list[dict], int]:
 _EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 _UP_TO_HIGH = ("low", "medium", "high")
 _EFFORT_BY_MODEL: dict[str, tuple[str, ...]] = {
-    "zai.glm-5.3": ("low", "high", "max"),
+    # All five per the AWS model card (read 2026-11-02, #29):
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-5-3.html
+    "zai.glm-5.3": _EFFORT_LEVELS,
     "zai.glm-5": _UP_TO_HIGH,
     "zai.glm-4.7": _UP_TO_HIGH,
     "zai.glm-4.7-flash": _UP_TO_HIGH,
